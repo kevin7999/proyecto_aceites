@@ -28,17 +28,37 @@ class VentaSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Venta
-        fields = ['id', 'fecha', 'total', 'detalles']
+        fields = [
+            'id', 'fecha', 'total', 'tasa_cambio', 'metodo_pago',
+            'cliente_nombre', 'cliente_cedula_rif', 'cliente_telefono', 'cliente_correo',
+            'detalles'
+        ]
         read_only_fields = ['id', 'fecha', 'total']
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
         
+        # Extraer campos adicionales con valores por defecto seguros
+        tasa_cambio = validated_data.get('tasa_cambio', 1.00)
+        metodo_pago = validated_data.get('metodo_pago', 'efectivo')
+        cliente_nombre = validated_data.get('cliente_nombre', None)
+        cliente_cedula_rif = validated_data.get('cliente_cedula_rif', None)
+        cliente_telefono = validated_data.get('cliente_telefono', None)
+        cliente_correo = validated_data.get('cliente_correo', None)
+
         if not detalles_data:
             raise serializers.ValidationError("La venta debe contener al menos un producto.")
 
         with transaction.atomic():
-            venta = Venta.objects.create(total=0)
+            venta = Venta.objects.create(
+                total=0,
+                tasa_cambio=tasa_cambio,
+                metodo_pago=metodo_pago,
+                cliente_nombre=cliente_nombre,
+                cliente_cedula_rif=cliente_cedula_rif,
+                cliente_telefono=cliente_telefono,
+                cliente_correo=cliente_correo
+            )
             total_venta = 0
 
             for detalle_data in detalles_data:

@@ -80,11 +80,19 @@ def enviar_cierre_n8n(ventas_hoy, fecha_cierre):
             "monto_generado": float(item['monto_total'])
         })
 
+    # Desglose de pagos por método
+    desglose_pagos = {
+        'efectivo': float(ventas_hoy.filter(metodo_pago='efectivo').aggregate(total=Sum('total'))['total'] or 0),
+        'pago_movil': float(ventas_hoy.filter(metodo_pago='pago_movil').aggregate(total=Sum('total'))['total'] or 0),
+        'punto_venta': float(ventas_hoy.filter(metodo_pago='punto_venta').aggregate(total=Sum('total'))['total'] or 0)
+    }
+
     payload = {
         "fecha": fecha_cierre.strftime("%Y-%m-%d"),
         "monto_acumulado": total_acumulado,
         "productos_vendidos_count": total_unidades,
-        "desglose_productos": desglose
+        "desglose_productos": desglose,
+        "desglose_pagos": desglose_pagos
     }
 
     url = settings.N8N_WEBHOOK_URL
@@ -131,10 +139,18 @@ class CierreDiarioView(APIView):
         total_acumulado = float(ventas_hoy.aggregate(total=Sum('total'))['total'] or 0)
         total_unidades = DetalleVenta.objects.filter(venta__in=ventas_hoy).aggregate(cant=Sum('cantidad'))['cant'] or 0
 
+        # Desglose de pagos por método
+        desglose_pagos = {
+            'efectivo': float(ventas_hoy.filter(metodo_pago='efectivo').aggregate(total=Sum('total'))['total'] or 0),
+            'pago_movil': float(ventas_hoy.filter(metodo_pago='pago_movil').aggregate(total=Sum('total'))['total'] or 0),
+            'punto_venta': float(ventas_hoy.filter(metodo_pago='punto_venta').aggregate(total=Sum('total'))['total'] or 0)
+        }
+
         res_data = {
             "fecha": hoy.strftime("%Y-%m-%d"),
             "monto_acumulado": total_acumulado,
             "productos_vendidos_count": total_unidades,
+            "desglose_pagos": desglose_pagos,
             "envio_n8n": {
                 "exito": exito,
                 "mensaje": mensaje

@@ -31,7 +31,36 @@ function POS() {
   const [showCierreModal, setShowCierreModal] = useState(false);
   const [backendStatus, setBackendStatus] = useState('checking');
 
+  // Tasa de cambio multidivisa
+  const [tasaCambio, setTasaCambio] = useState(() => {
+    const saved = localStorage.getItem('ruta8_tasa_cambio');
+    return saved ? parseFloat(saved) : 40.0;
+  });
+  const [editandoTasa, setEditandoTasa] = useState(false);
+  const [tasaTemporal, setTasaTemporal] = useState(tasaCambio.toString());
+
+  // Checkout Modal State
+  const [showCheckoutModal, setShowCheckoutModal] = useState(false);
+  const [clienteNombre, setClienteNombre] = useState('');
+  const [clienteCedulaRif, setClienteCedulaRif] = useState('');
+  const [clienteTelefono, setClienteTelefono] = useState('');
+  const [clienteCorreo, setClienteCorreo] = useState('');
+  const [metodoPago, setMetodoPago] = useState('efectivo');
+
   const scannerInputRef = useRef(null);
+
+  const guardarTasa = (e) => {
+    e.preventDefault();
+    const parsed = parseFloat(tasaTemporal);
+    if (!isNaN(parsed) && parsed > 0) {
+      setTasaCambio(parsed);
+      localStorage.setItem('ruta8_tasa_cambio', parsed.toString());
+      addAlert('success', `Tasa de cambio actualizada a Bs. ${parsed.toFixed(2)}`);
+      setEditandoTasa(false);
+    } else {
+      addAlert('warning', 'Ingrese un valor de tasa válido.');
+    }
+  };
 
   // Cargar productos al abrir vista de inventario
   useEffect(() => {
@@ -345,7 +374,7 @@ function POS() {
   };
 
   // Procesar y finalizar la venta en el backend
-  const finalizarVenta = async () => {
+  const finalizarVenta = async (checkoutData) => {
     if (cart.length === 0) {
       addAlert('warning', 'El carrito está vacío.');
       return;
@@ -357,6 +386,12 @@ function POS() {
         producto_id: item.id,
         cantidad: item.cantidad,
       })),
+      tasa_cambio: checkoutData.tasa_cambio,
+      metodo_pago: checkoutData.metodo_pago,
+      cliente_nombre: checkoutData.cliente_nombre || null,
+      cliente_cedula_rif: checkoutData.cliente_cedula_rif || null,
+      cliente_telefono: checkoutData.cliente_telefono || null,
+      cliente_correo: checkoutData.cliente_correo || null,
     };
 
     try {
@@ -374,6 +409,13 @@ function POS() {
       if (response.ok) {
         addAlert('success', `¡Venta registrada con éxito! Total: $${parseFloat(data.total).toFixed(2)}`);
         setCart([]);
+        setShowCheckoutModal(false);
+        // Limpiar datos de cliente
+        setClienteNombre('');
+        setClienteCedulaRif('');
+        setClienteTelefono('');
+        setClienteCorreo('');
+        setMetodoPago('efectivo');
       } else {
         const errorMsg = data.non_field_errors 
           ? data.non_field_errors.join(' ') 
@@ -514,6 +556,29 @@ function POS() {
         </nav>
         
         <div className="pos-status-bar">
+          <div className="status-item rate-badge">
+            {editandoTasa ? (
+              <form onSubmit={guardarTasa} className="tasa-edit-form">
+                <span>Tasa Bs.:</span>
+                <input 
+                  type="number" 
+                  step="0.01" 
+                  value={tasaTemporal} 
+                  onChange={(e) => setTasaTemporal(e.target.value)}
+                  className="tasa-input-mini"
+                  autoFocus
+                />
+                <button type="submit" className="btn-save-mini">✓</button>
+                <button type="button" className="btn-cancel-mini" onClick={() => setEditandoTasa(false)}>✗</button>
+              </form>
+            ) : (
+              <div className="tasa-display">
+                <span>Tasa: <b>Bs. {tasaCambio.toFixed(2)}</b></span>
+                <button className="btn-edit-mini" onClick={() => { setTasaTemporal(tasaCambio.toString()); setEditandoTasa(true); }} title="Editar Tasa de Cambio">✏️</button>
+              </div>
+            )}
+          </div>
+
           <div className="status-item user-badge">
             <span>Operador: <b>{username}</b></span>
             <button className="btn-logout-link" onClick={handleLogout} title="Cerrar sesión">Cerrar Sesión 🚪</button>
@@ -620,11 +685,18 @@ function POS() {
             <div className="card total-card">
               <span className="card-label">TOTAL NETO</span>
               <div className="total-amount">${totalVenta.toFixed(2)}</div>
+              <div className="total-amount-ves">Bs. {(totalVenta * tasaCambio).toFixed(2)}</div>
               <span className="item-count">{cart.reduce((a, b) => a + b.cantidad, 0)} envases registrados</span>
               
               <button 
                 className="btn btn-primary btn-checkout" 
-                onClick={finalizarVenta}
+                onClick={() => {
+                  if (cart.length === 0) {
+                    addAlert('warning', 'El carrito está vacío.');
+                    return;
+                  }
+                  setShowCheckoutModal(true);
+                }}
                 disabled={cart.length === 0 || loading}
               >
                 {loading ? 'Registrando...' : '✓ FINALIZAR VENTA'}
@@ -824,7 +896,25 @@ function POS() {
                 </div>
               </div>
 
-              <div className="n8n-status-box">
+              {cierreData.desglose_pagos && (
+                <div className="cierre-pagos-box">
+                  <h4>Desglose por Método de Pago:</h4>
+                  <div className="summary-item">
+                    <span className="summary-label">💵 Efectivo:</span>
+                    <span className="summary-val">${parseFloat(cierreData.desglose_pagos.efectivo).toFixed(2)}</span>
+                  </div>
+                  <div className="summary-item">
+                    <span className="summary-label">📱 Pago Móvil:</span>
+                    <span className="summary-val">${parseFloat(cierreData.desglose_pagos.pago_movil).toFixed(2)}</span>
+                  </div>
+                  <div className="summary-item">
+                    <span className="summary-label">💳 Punto de Venta:</span>
+                    <span className="summary-val">${parseFloat(cierreData.desglose_pagos.punto_venta).toFixed(2)}</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="n8n-status-box" style={{ marginTop: '16px' }}>
                 <h4>Estado de la sincronización (n8n):</h4>
                 <div className={`status-badge ${cierreData.envio_n8n?.exito ? 'success' : 'error'}`}>
                   {cierreData.envio_n8n?.exito ? 'Sincronizado' : 'Pendiente / Offline'}
@@ -836,6 +926,125 @@ function POS() {
               <button className="btn btn-primary" onClick={() => setShowCierreModal(false)}>
                 Aceptar
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Checkout / Confirmación de Pago */}
+      {showCheckoutModal && (
+        <div className="modal-backdrop">
+          <div className="modal-content modal-checkout">
+            <div className="modal-header">
+              <h2>Confirmar Registro de Venta</h2>
+              <button className="btn-close" onClick={() => setShowCheckoutModal(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="checkout-totals">
+                <div className="checkout-total-box">
+                  <span className="box-label">Monto en Dólares</span>
+                  <span className="box-value text-gold">${totalVenta.toFixed(2)}</span>
+                </div>
+                <div className="checkout-total-box">
+                  <span className="box-label">Monto en Bolívares (Tasa: {tasaCambio.toFixed(2)})</span>
+                  <span className="box-value">Bs. {(totalVenta * tasaCambio).toFixed(2)}</span>
+                </div>
+              </div>
+
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                finalizarVenta({
+                  tasa_cambio: tasaCambio,
+                  metodo_pago: metodoPago,
+                  cliente_nombre: clienteNombre,
+                  cliente_cedula_rif: clienteCedulaRif,
+                  cliente_telefono: clienteTelefono,
+                  cliente_correo: clienteCorreo
+                });
+              }} className="checkout-form">
+                
+                <h3 className="section-title">👤 Datos del Cliente</h3>
+                <div className="form-row">
+                  <div className="form-group-sm">
+                    <label>Cédula / RIF</label>
+                    <input 
+                      type="text" 
+                      placeholder="V-12345678 o J-123456789" 
+                      value={clienteCedulaRif}
+                      onChange={(e) => setClienteCedulaRif(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group-sm">
+                    <label>Nombre / Razón Social</label>
+                    <input 
+                      type="text" 
+                      placeholder="Ej. Juan Pérez" 
+                      value={clienteNombre}
+                      onChange={(e) => setClienteNombre(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="form-row">
+                  <div className="form-group-sm">
+                    <label>Teléfono</label>
+                    <input 
+                      type="text" 
+                      placeholder="Ej. 04121234567" 
+                      value={clienteTelefono}
+                      onChange={(e) => setClienteTelefono(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group-sm">
+                    <label>Correo Electrónico</label>
+                    <input 
+                      type="email" 
+                      placeholder="ejemplo@correo.com" 
+                      value={clienteCorreo}
+                      onChange={(e) => setClienteCorreo(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <h3 className="section-title">💳 Método de Pago</h3>
+                <div className="payment-methods-grid">
+                  <button
+                    type="button"
+                    className={`payment-method-btn ${metodoPago === 'efectivo' ? 'active' : ''}`}
+                    onClick={() => setMetodoPago('efectivo')}
+                  >
+                    <span className="method-icon">💵</span>
+                    <span className="method-name">Efectivo</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`payment-method-btn ${metodoPago === 'pago_movil' ? 'active' : ''}`}
+                    onClick={() => setMetodoPago('pago_movil')}
+                  >
+                    <span className="method-icon">📱</span>
+                    <span className="method-name">Pago Móvil</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`payment-method-btn ${metodoPago === 'punto_venta' ? 'active' : ''}`}
+                    onClick={() => setMetodoPago('punto_venta')}
+                  >
+                    <span className="method-icon">💳</span>
+                    <span className="method-name">Punto de Venta</span>
+                  </button>
+                </div>
+
+                <div className="modal-footer">
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowCheckoutModal(false)}>
+                    Cancelar
+                  </button>
+                  <button type="submit" className="btn btn-primary" disabled={loading}>
+                    {loading ? 'Procesando...' : '✓ Confirmar y Pagar'}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         </div>

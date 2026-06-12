@@ -928,3 +928,236 @@ body {
   background-color: rgba(239, 68, 68, 0.15);
   border-color: var(--accent-danger);
 }
+
+/* ==========================================
+   NUEVOS ESTILOS: MULTIDIVISA Y CHECKOUT MODAL
+   ========================================== */
+
+/* Total en VES en la tarjeta lateral */
+.total-amount-ves {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-top: -4px;
+  margin-bottom: 16px;
+}
+
+/* Indicador y Editor de Tasa de Cambio */
+.rate-badge {
+  padding: 4px 16px !important;
+}
+
+.tasa-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-edit-mini {
+  background: none;
+  border: none;
+  font-size: 0.95rem;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.btn-edit-mini:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.tasa-edit-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tasa-input-mini {
+  width: 65px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  font-weight: bold;
+  outline: none;
+}
+
+.tasa-input-mini:focus {
+  border-color: var(--accent-oil);
+}
+
+.btn-save-mini,
+.btn-cancel-mini {
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  font-weight: bold;
+  transition: all 0.2s;
+}
+
+.btn-save-mini:hover {
+  background-color: var(--accent-success);
+  color: #fff;
+  border-color: var(--accent-success);
+}
+
+.btn-cancel-mini:hover {
+  background-color: var(--accent-danger);
+  color: #fff;
+  border-color: var(--accent-danger);
+}
+
+/* Desglose de Pagos en el Cierre */
+.cierre-pagos-box {
+  margin-top: 16px;
+  padding: 16px;
+  background-color: rgba(9, 13, 22, 0.4);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.cierre-pagos-box h4 {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  border-bottom: 1px dashed var(--border-color);
+  padding-bottom: 6px;
+}
+
+/* Modal de Checkout / Pago */
+.modal-checkout {
+  width: 600px;
+}
+
+.checkout-totals {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.checkout-total-box {
+  flex: 1;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  padding: 16px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.checkout-total-box .box-label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.checkout-total-box .box-value {
+  font-size: 1.8rem;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.checkout-total-box .box-value.text-gold {
+  color: var(--accent-oil);
+}
+
+.checkout-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.checkout-form .section-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #ffffff;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 6px;
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+
+.checkout-form .form-row {
+  display: flex;
+  gap: 16px;
+}
+
+.checkout-form .form-row .form-group-sm {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.checkout-form .form-group-sm input {
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 1.05rem;
+  transition: all 0.2s;
+}
+
+.checkout-form .form-group-sm input:focus {
+  border-color: var(--accent-oil);
+  box-shadow: 0 0 8px rgba(255, 159, 28, 0.2);
+}
+
+/* Grid de Métodos de Pago */
+.payment-methods-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.payment-method-btn {
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  padding: 18px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.payment-method-btn:hover {
+  background-color: var(--border-color);
+  color: #ffffff;
+  transform: translateY(-2px);
+}
+
+.payment-method-btn.active {
+  background-color: rgba(255, 159, 28, 0.12);
+  border-color: var(--accent-oil);
+  color: var(--accent-oil);
+  box-shadow: 0 0 15px rgba(255, 159, 28, 0.15);
+}
+
+.payment-method-btn .method-icon {
+  font-size: 1.8rem;
+}
+
+.payment-method-btn .method-name {
+  font-size: 0.95rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}

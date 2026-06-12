@@ -30,6 +30,12 @@ class Producto(models.Model):
 
 
 class Venta(models.Model):
+    METODOS_PAGO = [
+        ('efectivo', 'Efectivo'),
+        ('pago_movil', 'Pago Móvil'),
+        ('punto_venta', 'Punto de Venta'),
+    ]
+
     fecha = models.DateTimeField(
         auto_now_add=True,
         verbose_name="Fecha de Venta"
@@ -38,6 +44,41 @@ class Venta(models.Model):
         max_digits=12,
         decimal_places=2,
         verbose_name="Monto Total"
+    )
+    tasa_cambio = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=1.00,
+        verbose_name="Tasa de Cambio"
+    )
+    metodo_pago = models.CharField(
+        max_length=50,
+        choices=METODOS_PAGO,
+        default='efectivo',
+        verbose_name="Método de Pago"
+    )
+    cliente_nombre = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name="Nombre del Cliente"
+    )
+    cliente_cedula_rif = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        verbose_name="Cédula/RIF del Cliente"
+    )
+    cliente_telefono = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        verbose_name="Teléfono del Cliente"
+    )
+    cliente_correo = models.EmailField(
+        blank=True,
+        null=True,
+        verbose_name="Correo del Cliente"
     )
 
     def __str__(self):
