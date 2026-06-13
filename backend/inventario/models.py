@@ -20,6 +20,11 @@ class Producto(models.Model):
         default=0,
         verbose_name="Stock Actual"
     )
+    categoria = models.CharField(
+        max_length=100,
+        default="Otros",
+        verbose_name="Categoría"
+    )
 
     def __str__(self):
         return f"{self.nombre_completo} ({self.codigo_barras})"
@@ -34,6 +39,7 @@ class Venta(models.Model):
         ('efectivo', 'Efectivo'),
         ('pago_movil', 'Pago Móvil'),
         ('punto_venta', 'Punto de Venta'),
+        ('mixto', 'Mixto (USD + Bs)'),
     ]
 
     fecha = models.DateTimeField(
@@ -56,6 +62,40 @@ class Venta(models.Model):
         choices=METODOS_PAGO,
         default='efectivo',
         verbose_name="Método de Pago"
+    )
+    iva = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0.00,
+        verbose_name="Monto IVA (16%)"
+    )
+    igtf = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0.00,
+        verbose_name="Monto IGTF (3%)"
+    )
+    monto_efectivo_usd = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0.00,
+        verbose_name="Monto pagado en Efectivo USD"
+    )
+    monto_electronico_bs = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0.00,
+        verbose_name="Monto pagado en Bs electrónico"
+    )
+    metodo_pago_restante = models.CharField(
+        max_length=50,
+        choices=[
+            ('pago_movil', 'Pago Móvil'),
+            ('punto_venta', 'Punto de Venta'),
+        ],
+        blank=True,
+        null=True,
+        verbose_name="Método de Pago Restante (Bs)"
     )
     cliente_nombre = models.CharField(
         max_length=255,

@@ -185,3 +185,141 @@ class CustomObtainAuthToken(ObtainAuthToken):
             'user_id': user.pk,
             'username': user.username
         })
+
+
+class ClientesView(APIView):
+    """
+    Endpoint GET '/api/inventario/clientes/'
+    Devuelve la lista de clientes únicos registrados en las ventas,
+    calculando la cantidad de compras y el total de dinero gastado.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # Filtrar ventas que tengan información del cliente (nombre o cédula no vacíos/nulos)
+        ventas = Venta.objects.exclude(
+            cliente_nombre__isnull=True,
+            cliente_cedula_rif__isnull=True
+        ).exclude(
+            cliente_nombre="",
+            cliente_cedula_rif=""
+        )
+
+        clientes_dict = {}
+        for v in ventas:
+            cedula = (v.cliente_cedula_rif or '').strip()
+            nombre = (v.cliente_nombre or '').strip()
+            # Usar la cédula como clave principal de unicidad si existe; de lo contrario, el nombre
+            key = cedula if cedula else nombre
+            if not key:
+                continue
+
+            if key not in clientes_dict:
+                clientes_dict[key] = {
+                    'nombre': nombre or 'Sin Nombre',
+                    'cedula_rif': cedula,
+                    'telefono': (v.cliente_telefono or '').strip(),
+                    'correo': (v.cliente_correo or '').strip(),
+                    'compras_count': 0,
+                    'total_gastado': 0.0
+                }
+
+            clientes_dict[key]['compras_count'] += 1
+            clientes_dict[key]['total_gastado'] += float(v.total)
+
+            # Si el registro de venta actual tiene teléfono/correo y el dict no, los actualizamos
+            if not clientes_dict[key]['telefono'] and v.cliente_telefono:
+                clientes_dict[key]['telefono'] = v.cliente_telefono.strip()
+            if not clientes_dict[key]['correo'] and v.cliente_correo:
+                clientes_dict[key]['correo'] = v.cliente_correo.strip()
+
+        # Retornamos los clientes ordenados por nombre
+        clientes_lista = sorted(list(clientes_dict.values()), key=lambda x: x['nombre'].lower())
+        return Response(clientes_lista)
+
+
+class BuscarClienteView(APIView):
+    """
+    Endpoint GET '/api/inventario/clientes/buscar/'
+    Busca si existe alguna venta con la cédula/RIF dada
+    y retorna la información del cliente para autocompletar.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        cedula = request.query_params.get('cedula_rif', '').strip()
+        if not cedula:
+            return Response({"error": "Debe especificar la cédula/RIF."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Buscar la venta más reciente con esta cédula
+        venta = Venta.objects.filter(cliente_cedula_rif=cedula).order_by('-fecha').first()
+        if venta:
+            return Response({
+                'nombre': venta.cliente_nombre or '',
+                'cedula_rif': venta.cliente_cedula_rif or '',
+                'telefono': venta.cliente_telefono or '',
+                'correo': venta.cliente_correo or ''
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({"message": "Cliente nuevo"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class EditarClienteView(APIView):
+    """
+    Endpoint PUT '/api/inventario/clientes/editar/'
+    Actualiza la información del cliente en todas sus ventas asociadas.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request):
+        old_cedula = request.data.get('old_cedula_rif', '').strip()
+        old_nombre = request.data.get('old_nombre', '').strip()
+
+        nuevo_nombre = request.data.get('nombre', '').strip()
+        nueva_cedula = request.data.get('cedula_rif', '').strip()
+        nuevo_telefono = request.data.get('telefono', '').strip()
+
+        if not old_cedula and not old_nombre:
+            return Response({"error": "Identificador actual de cliente faltante."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Buscar ventas por cédula (prioritario) o por nombre
+        if old_cedula:
+            ventas = Venta.objects.filter(cliente_cedula_rif=old_cedula)
+        else:
+            ventas = Venta.objects.filter(cliente_nombre=old_nombre)
+
+        if not ventas.exists():
+            return Response({"error": "No se encontraron registros del cliente."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Actualizar en bloque
+        ventas.update(
+            cliente_nombre=nuevo_nombre,
+            cliente_cedula_rif=nueva_cedula,
+            cliente_telefono=nuevo_telefono
+        )
+
+        return Response({"success": "Cliente actualizado en todos sus registros."})
+
+
+class HistorialClienteView(APIView):
+    """
+    Endpoint GET '/api/inventario/clientes/historial/'
+    Retorna la lista de todas las compras (ventas) asociadas a un cliente con sus detalles.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        cedula = request.query_params.get('cedula_rif', '').strip()
+        nombre = request.query_params.get('nombre', '').strip()
+
+        if cedula:
+            ventas = Venta.objects.filter(cliente_cedula_rif=cedula).order_by('-fecha')
+        elif nombre:
+            ventas = Venta.objects.filter(cliente_nombre=nombre).order_by('-fecha')
+        else:
+            return Response({"error": "Debe especificar cédula/RIF o nombre del cliente."}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = VentaSerializer(ventas, many=True)
+        return Response(serializer.data)
+
+
