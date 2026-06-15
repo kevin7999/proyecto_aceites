@@ -402,6 +402,8 @@ body {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .section-header h2 {
@@ -1490,6 +1492,8 @@ body {
 .category-badge {
   background-color: rgba(6, 182, 212, 0.1) !important;
   border-color: rgba(6, 182, 212, 0.25) !important;
+  display: inline-block;
+  white-space: nowrap;
 }
 
 .filter-select:focus {
