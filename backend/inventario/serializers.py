@@ -1,11 +1,11 @@
 from rest_framework import serializers
 from django.db import transaction
-from .models import Producto, Venta, DetalleVenta
+from .models import Producto, Venta, DetalleVenta, CierreCaja
 
 class ProductoSerializer(serializers.ModelSerializer):
     class Meta:
         model = Producto
-        fields = ['id', 'codigo_barras', 'nombre_completo', 'precio_venta', 'stock_actual', 'categoria']
+        fields = ['id', 'codigo_barras', 'nombre_completo', 'precio_venta', 'precio_costo', 'stock_actual', 'categoria']
 
 
 class DetalleVentaSerializer(serializers.ModelSerializer):
@@ -16,7 +16,7 @@ class DetalleVentaSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = DetalleVenta
-        fields = ['id', 'producto', 'producto_id', 'cantidad', 'precio_unitario']
+        fields = ['id', 'producto', 'producto_id', 'cantidad', 'precio_unitario', 'precio_costo_unitario']
         # El precio unitario puede ser opcional al escribir si queremos tomarlo del Producto
         extra_kwargs = {
             'precio_unitario': {'required': False}
@@ -101,7 +101,8 @@ class VentaSerializer(serializers.ModelSerializer):
                     venta=venta,
                     producto=producto,
                     cantidad=cantidad,
-                    precio_unitario=precio_unitario
+                    precio_unitario=precio_unitario,
+                    precio_costo_unitario=producto.precio_costo
                 )
 
             # Calcular IVA (16%) y IGTF (3% sobre pago en divisa efectivo)
@@ -144,3 +145,13 @@ class VentaSerializer(serializers.ModelSerializer):
             venta.save()
 
         return venta
+
+
+class CierreCajaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CierreCaja
+        fields = [
+            'id', 'fecha', 'monto_acumulado', 'productos_vendidos_count',
+            'tasa_cambio', 'efectivo_usd', 'pago_movil_usd', 'punto_venta_usd',
+            'sincronizado_n8n', 'mensaje_n8n'
+        ]

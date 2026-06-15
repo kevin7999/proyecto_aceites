@@ -156,3 +156,99 @@ class InventarioAPITests(APITestCase):
         exito, mensaje = enviar_cierre_n8n(ventas_hoy, hoy)
         self.assertTrue(exito)
         self.assertEqual(mensaje, "Cierre enviado exitosamente a n8n.")
+
+    def test_descargar_backup(self):
+        """Probar que el endpoint de backup retorna el archivo SQLite."""
+        url = reverse('download-backup')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.has_header('Content-Disposition'))
+        self.assertIn('attachment; filename="backup_ruta8_', response['Content-Disposition'])
+
+    def test_importar_productos_csv(self):
+        """Probar que el importador procesa correctamente un archivo CSV."""
+        import io
+        csv_data = (
+            "codigo_barras;nombre_completo;precio_costo;precio_venta;stock_actual;categoria\n"
+            "55555;Aceite Prueba Importacion;50.00;75.00;10;Aceites\n"
+            "11111;Aceite Inca 20W50 Mineral 1L;95.00;160.00;25;Aceites\n"
+        )
+        csv_file = io.BytesIO(csv_data.encode('utf-8'))
+        csv_file.name = 'test_productos.csv'
+
+        url = reverse('importar-csv')
+        response = self.client.post(url, {'file': csv_file}, format='multipart')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['creados'], 1)  # 55555 es nuevo
+        self.assertEqual(response.data['actualizados'], 1)  # 11111 ya existía
+
+        # Verificar cambios en base de datos
+        prod_nuevo = Producto.objects.get(codigo_barras="55555")
+        self.assertEqual(prod_nuevo.nombre_completo, "Aceite Prueba Importacion")
+        self.assertEqual(float(prod_nuevo.precio_venta), 75.00)
+
+        prod_existente = Producto.objects.get(codigo_barras="11111")
+        self.assertEqual(float(prod_existente.precio_costo), 95.00)
+        self.assertEqual(float(prod_existente.precio_venta), 160.00)
+        self.assertEqual(prod_existente.stock_actual, 25)
+
+    def test_importar_productos_excel_dinamico(self):
+        """Probar que el importador procesa correctamente un archivo Excel con encabezados dinámicos."""
+        import openpyxl
+        import io
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        
+        ws.append(["Código de Barras", "Producto / Nombre", "Marca", "Precio Neto (Venta)", "Precio Costo", "Cantidad (Stock)", "Categoría"])
+        ws.append(["88888", "Aceite Semisintético 10W40", "Castrol", "12.50", "8.00", "20", "Lubricantes"])
+        ws.append(["N/A", "Aceite Inca 20W50 Mineral 1L", "", "155.00", "110.00", "15", "Lubricantes"])
+        
+        excel_file = io.BytesIO()
+        wb.save(excel_file)
+        excel_file.seek(0)
+        excel_file.name = 'test_productos_dinamico.xlsx'
+        
+        url = reverse('importar-csv')
+        response = self.client.post(url, {'file': excel_file}, format='multipart')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['creados'], 1)
+        self.assertEqual(response.data['actualizados'], 1)
+        
+        prod_nuevo = Producto.objects.get(codigo_barras="88888")
+        self.assertEqual(prod_nuevo.nombre_completo, "Aceite Semisintético 10W40 (Castrol)")
+        self.assertEqual(float(prod_nuevo.precio_venta), 12.50)
+        self.assertEqual(float(prod_nuevo.precio_costo), 8.00)
+        self.assertEqual(prod_nuevo.stock_actual, 20)
+        self.assertEqual(prod_nuevo.categoria, "Lubricantes")
+        
+        prod_existente = Producto.objects.get(nombre_completo="Aceite Inca 20W50 Mineral 1L")
+        self.assertEqual(float(prod_existente.precio_venta), 155.00)
+        self.assertEqual(float(prod_existente.precio_costo), 110.00)
+        self.assertEqual(prod_existente.stock_actual, 15)
+
+    def test_importar_productos_excel_heredado(self):
+        """Probar que el importador procesa correctamente el formato heredado (Ruta 8) sin encabezados dinámicos."""
+        import openpyxl
+        import io
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        
+        ws.append(["ESTANTE PRUEBA", None, None, None, None, None, None, None])
+        ws.append(["PRODUCTOS", "CANTIDAD", "P.UNIT", None, None, None, "SUBTOTAL", "TOTAL DÓLAR"])
+        ws.append(["Aceite Inca 20W50 Mineral 1L", "50", "90.00", None, None, None, "120.00", "130.00"])
+        
+        excel_file = io.BytesIO()
+        wb.save(excel_file)
+        excel_file.seek(0)
+        excel_file.name = 'test_productos_heredado.xlsx'
+        
+        url = reverse('importar-csv')
+        response = self.client.post(url, {'file': excel_file}, format='multipart')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['actualizados'], 1)
+        
+        prod_existente = Producto.objects.get(nombre_completo="Aceite Inca 20W50 Mineral 1L")
+        self.assertEqual(float(prod_existente.precio_venta), 130.00)
+        self.assertEqual(float(prod_existente.precio_costo), 90.00)
+        self.assertEqual(prod_existente.stock_actual, 50)
+        self.assertEqual(prod_existente.categoria, "Estante Prueba")

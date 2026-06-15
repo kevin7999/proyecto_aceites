@@ -36,12 +36,195 @@ body {
 /* Layout Principal */
 .pos-layout {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100vh;
+  width: 100vw;
+  background-color: var(--bg-primary);
+  overflow: hidden;
+}
+
+.pos-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   padding: 16px;
   gap: 16px;
-  max-width: 1800px;
-  margin: 0 auto;
+  overflow-y: auto;
+  min-width: 0;
+}
+
+/* Sidebar Styles */
+.pos-sidebar {
+  width: 260px;
+  background-color: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  padding: 24px 16px;
+  position: relative;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 90;
+  height: 100%;
+  flex-shrink: 0;
+}
+
+.pos-layout.sidebar-collapsed .pos-sidebar {
+  width: 78px;
+}
+
+/* Sidebar Brand */
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 36px;
+  padding: 0 8px;
+  overflow: hidden;
+}
+
+.sidebar-brand .logo-icon {
+  font-size: 2.2rem;
+  flex-shrink: 0;
+}
+
+.brand-text h2 {
+  font-size: 1.4rem;
+  font-weight: 800;
+  line-height: 1.1;
+  background: linear-gradient(135deg, #fff 30%, var(--accent-oil));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  white-space: nowrap;
+}
+
+.brand-text p {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 2px;
+  white-space: nowrap;
+}
+
+/* Navigation Links */
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+
+.sidebar-btn {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  padding: 12px 16px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: all 0.2s ease;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sidebar-btn:hover {
+  background-color: var(--bg-tertiary);
+  color: var(--text-main);
+  border-color: var(--border-color);
+}
+
+.sidebar-btn.active {
+  background-color: rgba(255, 159, 28, 0.1);
+  color: var(--accent-oil);
+  border-color: rgba(255, 159, 28, 0.3);
+  box-shadow: 0 4px 12px rgba(255, 159, 28, 0.05);
+}
+
+.sidebar-btn .btn-icon {
+  font-size: 1.3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sidebar-btn .btn-label {
+  font-size: 1rem;
+}
+
+/* Footer & Logout */
+.sidebar-footer {
+  border-top: 1px solid var(--border-color);
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.user-info {
+  font-size: 0.95rem;
+  color: var(--text-main);
+  padding: 4px 8px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.btn-logout {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--accent-danger);
+  padding: 12px 16px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: all 0.2s ease;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.btn-logout:hover {
+  background-color: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.2);
+}
+
+/* Toggle Button */
+.sidebar-toggle-btn {
+  position: absolute;
+  top: 50%;
+  right: -12px;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  z-index: 95;
+  transition: all 0.2s;
+  box-shadow: var(--shadow-sm);
+}
+
+.sidebar-toggle-btn:hover {
+  background-color: var(--accent-oil);
+  color: #000;
+  border-color: var(--accent-oil);
 }
 
 /* Alertas y Notificaciones */
@@ -1697,6 +1880,73 @@ body {
 
 .restante-method-btn .btn-icon {
   font-size: 1.2rem;
+}
+
+/* Estilos para el buscador manual de productos por nombre */
+.search-item-hover {
+  transition: background-color 0.2s ease;
+}
+
+.search-item-hover:hover {
+  background-color: var(--bg-secondary) !important;
+  color: var(--accent-oil) !important;
+}
+
+/* Comprobante de cierre diario y soporte de impresión */
+.ticket-container {
+  box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.05);
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  .print-section-modal, .print-section-modal * {
+    visibility: visible !important;
+  }
+  .print-section-modal {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  .ticket-container {
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+  }
+  /* Ocultar elementos innecesarios al imprimir */
+  .modal-backdrop {
+    background: transparent !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    display: block !important;
+  }
+  .modal-content {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  .modal-header, .modal-tabs, .modal-footer, .no-print, .btn-close {
+    display: none !important;
+  }
 }
 
 

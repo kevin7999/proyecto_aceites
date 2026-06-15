@@ -16,6 +16,12 @@ class Producto(models.Model):
         decimal_places=2,
         verbose_name="Precio de Venta"
     )
+    precio_costo = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0.00,
+        verbose_name="Precio de Costo"
+    )
     stock_actual = models.IntegerField(
         default=0,
         verbose_name="Stock Actual"
@@ -149,6 +155,12 @@ class DetalleVenta(models.Model):
         decimal_places=2,
         verbose_name="Precio Unitario"
     )
+    precio_costo_unitario = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0.00,
+        verbose_name="Precio de Costo Unitario"
+    )
 
     def __str__(self):
         return f"{self.cantidad} x {self.producto.nombre_completo} en Venta #{self.venta.id}"
@@ -156,3 +168,59 @@ class DetalleVenta(models.Model):
     class Meta:
         verbose_name = "Detalle de Venta"
         verbose_name_plural = "Detalles de Venta"
+
+
+class CierreCaja(models.Model):
+    fecha = models.DateField(
+        unique=True,
+        db_index=True,
+        verbose_name="Fecha de Cierre"
+    )
+    monto_acumulado = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        verbose_name="Monto Total Acumulado"
+    )
+    productos_vendidos_count = models.IntegerField(
+        verbose_name="Cantidad Total de Unidades"
+    )
+    tasa_cambio = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=1.00,
+        verbose_name="Tasa de Cambio"
+    )
+    efectivo_usd = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0.00,
+        verbose_name="Efectivo USD"
+    )
+    pago_movil_usd = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0.00,
+        verbose_name="Pago Móvil USD"
+    )
+    punto_venta_usd = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0.00,
+        verbose_name="Punto de Venta USD"
+    )
+    sincronizado_n8n = models.BooleanField(
+        default=False,
+        verbose_name="Sincronizado con n8n"
+    )
+    mensaje_n8n = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name="Mensaje de n8n"
+    )
+
+    def __str__(self):
+        return f"Cierre {self.fecha.strftime('%d/%m/%Y')} - Total: {self.monto_acumulado}"
+
+    class Meta:
+        verbose_name = "Cierre de Caja"
+        verbose_name_plural = "Cierres de Caja"
