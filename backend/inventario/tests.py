@@ -5,6 +5,7 @@ from rest_framework.test import APITestCase
 from django.contrib.auth.models import User
 from rest_framework.authtoken.models import Token
 from unittest.mock import patch
+from decimal import Decimal
 
 from inventario.models import Producto, Venta, DetalleVenta
 from inventario.views import enviar_cierre_n8n
@@ -87,6 +88,30 @@ class InventarioAPITests(APITestCase):
         self.assertEqual(self.producto_aceite.stock_actual, 7)
         self.assertEqual(self.producto_filtro.stock_actual, 3)
 
+    def test_registrar_venta_con_descuento(self):
+        """Probar que al registrar una venta con descuento se resten correctamente los totales y se calculen los impuestos sobre la base descontada."""
+        url = reverse('registrar-venta')
+        # subtotal_venta bruto: 2 * 150 = 300.00
+        # descuento: 50.00
+        # total_productos_descontado: 250.00
+        # iva (16% extraido de 250): 250 - (250 / 1.16) = 34.4827...
+        # igtf (si hay descuento, es 0%): 0.00
+        # total final: 250.00
+        payload = {
+            "detalles": [
+                {"producto_id": self.producto_aceite.id, "cantidad": 2}
+            ],
+            "metodo_pago": "efectivo",
+            "descuento": 50.00
+        }
+        
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(float(response.data['descuento']), 50.00)
+        self.assertAlmostEqual(float(response.data['total']), 250.00, places=2)
+        self.assertAlmostEqual(float(response.data['iva']), 34.48, places=2)
+        self.assertAlmostEqual(float(response.data['igtf']), 0.00, places=2)
+
     def test_registrar_venta_stock_insuficiente_falla(self):
         """Probar que si un producto no tiene suficiente stock la venta falla completamente."""
         url = reverse('registrar-venta')
@@ -153,7 +178,7 @@ class InventarioAPITests(APITestCase):
         hoy = date.today()
         ventas_hoy = Venta.objects.filter(id=venta.id)
 
-        exito, mensaje = enviar_cierre_n8n(ventas_hoy, hoy)
+        exito, mensaje = enviar_cierre_n8n(hoy)
         self.assertTrue(exito)
         self.assertEqual(mensaje, "Cierre enviado exitosamente a n8n.")
 
@@ -252,3 +277,107 @@ class InventarioAPITests(APITestCase):
         self.assertEqual(float(prod_existente.precio_costo), 90.00)
         self.assertEqual(prod_existente.stock_actual, 50)
         self.assertEqual(prod_existente.categoria, "Estante Prueba")
+
+    def test_devolucion_anulacion_completa(self):
+        """Probar anulación completa de una venta, stock reintegrado y PIN correcto."""
+        venta = Venta.objects.create(
+            total=Decimal('300.00'),
+            tasa_cambio=Decimal('36.00'),
+            metodo_pago='efectivo',
+            estado='completada'
+        )
+        DetalleVenta.objects.create(
+            venta=venta,
+            producto=self.producto_aceite,
+            cantidad=2,
+            precio_unitario=Decimal('150.00')
+        )
+        self.producto_aceite.stock_actual = 8
+        self.producto_aceite.save()
+        
+        url = reverse('devoluciones')
+        
+        # Probar con PIN incorrecto
+        payload = {
+            "venta_id": venta.id,
+            "tipo": "anulacion",
+            "pin": "0000",
+            "motivo": "Cliente insatisfecho"
+        }
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        
+        # Probar con PIN correcto
+        payload["pin"] = "7804"
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        
+        # Verificar stock reintegrado
+        self.producto_aceite.refresh_from_db()
+        self.assertEqual(self.producto_aceite.stock_actual, 10) # 8 + 2 = 10
+        
+        # Verificar estado de venta
+        venta.refresh_from_db()
+        self.assertEqual(venta.estado, 'anulada')
+
+    def test_devolucion_cambio_canje(self):
+        """Probar cambio parcial de productos, stock ajustado y cálculo de saldo a favor."""
+        # 1. Crear venta original
+        # Venta total: $150 (aceite) * 2 = 300.
+        # Descuento: $50
+        # Venta final total: $250
+        venta = Venta.objects.create(
+            total=Decimal('250.00'),
+            tasa_cambio=Decimal('36.00'),
+            metodo_pago='efectivo',
+            descuento=Decimal('50.00'),
+            estado='completada'
+        )
+        DetalleVenta.objects.create(
+            venta=venta,
+            producto=self.producto_aceite,
+            cantidad=2,
+            precio_unitario=Decimal('150.00'),
+            precio_costo_unitario=Decimal('100.00')
+        )
+        
+        self.producto_aceite.stock_actual = 8
+        self.producto_aceite.save()
+        
+        # Producto filtro de aceite (para el cambio nuevo)
+        # Precio de venta: $80
+        # Stock: 5
+        self.producto_filtro.stock_actual = 5
+        self.producto_filtro.save()
+        
+        url = reverse('devoluciones')
+        
+        # Canje: Devuelve 1 aceite ($150 original, pero con descuento es $150 * (250/300) = $125 saldo a favor)
+        # Se lleva 1 filtro de aceite ($80 nuevo)
+        # Diferencia: 80 - 125 = -$45 (vuelto para el cliente)
+        payload = {
+            "venta_id": venta.id,
+            "tipo": "cambio",
+            "pin": "7804",
+            "motivo": "Cambio de repuesto",
+            "detalles_devolucion": [
+                {"producto_id": self.producto_aceite.id, "cantidad": 1}
+            ],
+            "nuevos_items": [
+                {"producto_id": self.producto_filtro.id, "cantidad": 1}
+            ],
+            "metodo_diferencia": "efectivo"
+        }
+        
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        
+        # Verificar stocks
+        self.producto_aceite.refresh_from_db()
+        self.producto_filtro.refresh_from_db()
+        self.assertEqual(self.producto_aceite.stock_actual, 9) # 8 + 1 = 9
+        self.assertEqual(self.producto_filtro.stock_actual, 4) # 5 - 1 = 4
+        
+        # Verificar estado de venta
+        venta.refresh_from_db()
+        self.assertEqual(venta.estado, 'con_cambios')

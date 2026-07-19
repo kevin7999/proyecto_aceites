@@ -126,6 +126,22 @@ class Venta(models.Model):
         null=True,
         verbose_name="Correo del Cliente"
     )
+    descuento = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0.00,
+        verbose_name="Monto Descuento (USD)"
+    )
+    estado = models.CharField(
+        max_length=20,
+        choices=[
+            ('completada', 'Completada'),
+            ('anulada', 'Anulada'),
+            ('con_cambios', 'Con Cambios')
+        ],
+        default='completada',
+        verbose_name="Estado de la Venta"
+    )
 
     def __str__(self):
         return f"Venta #{self.id} - {self.fecha.strftime('%d/%m/%Y %H:%M')} - Total: {self.total}"
@@ -224,3 +240,119 @@ class CierreCaja(models.Model):
     class Meta:
         verbose_name = "Cierre de Caja"
         verbose_name_plural = "Cierres de Caja"
+
+
+class Devolucion(models.Model):
+    venta = models.ForeignKey(
+        Venta,
+        on_delete=models.CASCADE,
+        related_name="devoluciones",
+        verbose_name="Venta Original"
+    )
+    fecha = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="Fecha de Devolución"
+    )
+    tipo = models.CharField(
+        max_length=20,
+        choices=[
+            ('anulacion', 'Anulación'),
+            ('cambio', 'Cambio')
+        ],
+        default='anulacion',
+        verbose_name="Tipo de Operación"
+    )
+    monto_saldo_favor_usd = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        verbose_name="Monto Saldo a Favor (USD)"
+    )
+    monto_saldo_favor_bs = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        verbose_name="Monto Saldo a Favor (Bs.)"
+    )
+    diferencia_usd = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0.00,
+        verbose_name="Diferencia Monetaria (USD)"
+    )
+    metodo_diferencia = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        verbose_name="Método de Diferencia"
+    )
+    motivo = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name="Motivo"
+    )
+
+    def __str__(self):
+        return f"Devolución #{self.id} (Venta #{self.venta.id}) - Tipo: {self.tipo}"
+
+    class Meta:
+        verbose_name = "Devolución"
+        verbose_name_plural = "Devoluciones"
+
+
+class DetalleDevolucion(models.Model):
+    devolucion = models.ForeignKey(
+        Devolucion,
+        on_delete=models.CASCADE,
+        related_name="detalles",
+        verbose_name="Devolución"
+    )
+    producto_devuelto = models.ForeignKey(
+        Producto,
+        on_delete=models.PROTECT,
+        related_name="items_devueltos",
+        verbose_name="Producto Devuelto"
+    )
+    cantidad = models.IntegerField(
+        verbose_name="Cantidad Devuelta"
+    )
+    precio_original_usd = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        verbose_name="Precio Original (USD)"
+    )
+
+    def __str__(self):
+        return f"Devuelto: {self.cantidad} x {self.producto_devuelto.nombre_completo}"
+
+    class Meta:
+        verbose_name = "Detalle de Devolución"
+        verbose_name_plural = "Detalles de Devolución"
+
+
+class DetalleCambioNuevo(models.Model):
+    devolucion = models.ForeignKey(
+        Devolucion,
+        on_delete=models.CASCADE,
+        related_name="nuevos_items",
+        verbose_name="Devolución"
+    )
+    producto_nuevo = models.ForeignKey(
+        Producto,
+        on_delete=models.PROTECT,
+        related_name="items_nuevos",
+        verbose_name="Producto Nuevo Entregado"
+    )
+    cantidad = models.IntegerField(
+        verbose_name="Cantidad Entregada"
+    )
+    precio_venta_usd = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        verbose_name="Precio Venta Cobrado (USD)"
+    )
+
+    def __str__(self):
+        return f"Nuevo Entregado: {self.cantidad} x {self.producto_nuevo.nombre_completo}"
+
+    class Meta:
+        verbose_name = "Detalle de Cambio Nuevo"
+        verbose_name_plural = "Detalles de Cambio Nuevo"

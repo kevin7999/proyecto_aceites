@@ -96,6 +96,18 @@ function POS() {
   const [pagoMixtoActivo, setPagoMixtoActivo] = useState(false);
   const [montoEfectivoUSDInput, setMontoEfectivoUSDInput] = useState('');
   const [metodoPagoRestante, setMetodoPagoRestante] = useState('pago_movil'); // 'pago_movil' o 'punto_venta'
+  const [descuentoValor, setDescuentoValor] = useState(0); // valor del descuento (monto fijo en USD)
+
+  // Devoluciones y Canjes State
+  const [showDevolucionModal, setShowDevolucionModal] = useState(false);
+  const [ventaEnDevolucion, setVentaEnDevolucion] = useState(null);
+  const [devolucionTipo, setDevolucionTipo] = useState('anulacion'); // 'anulacion' o 'cambio'
+  const [motivoDevolucion, setMotivoDevolucion] = useState('');
+  const [pinDevolucion, setPinDevolucion] = useState('');
+  const [cantidadesDevueltas, setCantidadesDevueltas] = useState({}); // { producto_id: cantidad }
+  const [itemsNuevos, setItemsNuevos] = useState([]); // [{ ...producto, cantidad }]
+  const [metodoDiferencia, setMetodoDiferencia] = useState('efectivo'); // 'efectivo', 'pago_movil', 'punto_venta'
+  const [busquedaDevolucionNombre, setBusquedaDevolucionNombre] = useState('');
 
   // Modales de Clientes
   const [showEditClienteModal, setShowEditClienteModal] = useState(false);
@@ -828,6 +840,7 @@ function POS() {
       cliente_cedula_rif: checkoutData.cliente_cedula_rif || null,
       cliente_telefono: checkoutData.cliente_telefono || null,
       cliente_correo: checkoutData.cliente_correo || null,
+      descuento: checkoutData.descuento || 0.00,
     };
 
     try {
@@ -861,6 +874,7 @@ function POS() {
         setPagoMixtoActivo(false);
         setMontoEfectivoUSDInput('');
         setMetodoPagoRestante('pago_movil');
+        setDescuentoValor(0);
         fetchVentas();
       } else {
         const errorMsg = data.non_field_errors 
@@ -870,6 +884,107 @@ function POS() {
       }
     } catch (error) {
       addAlert('error', 'Error de red al procesar la venta.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const abrirModalDevolucion = (venta) => {
+    setVentaEnDevolucion(venta);
+    setDevolucionTipo('anulacion');
+    setMotivoDevolucion('');
+    setPinDevolucion('');
+    const cants = {};
+    venta.detalles.forEach(det => {
+      cants[det.producto.id] = 0;
+    });
+    setCantidadesDevueltas(cants);
+    setItemsNuevos([]);
+    setMetodoDiferencia('efectivo');
+    setBusquedaDevolucionNombre('');
+    setShowDevolucionModal(true);
+  };
+
+  const addProductToExchange = (prod) => {
+    setItemsNuevos(prev => {
+      const exists = prev.find(item => item.id === prod.id);
+      if (exists) {
+        return prev.map(item => item.id === prod.id ? { ...item, cantidad: item.cantidad + 1 } : item);
+      }
+      return [...prev, { ...prod, cantidad: 1 }];
+    });
+  };
+
+  const removeProductFromExchange = (prodId) => {
+    setItemsNuevos(prev => prev.filter(item => item.id !== prodId));
+  };
+
+  const updateQuantityExchange = (prodId, val) => {
+    const cant = Math.max(1, parseInt(val) || 1);
+    setItemsNuevos(prev => prev.map(item => item.id === prodId ? { ...item, cantidad: cant } : item));
+  };
+
+  const handleProcesarDevolucion = async (e) => {
+    e.preventDefault();
+    if (pinDevolucion !== '7804') {
+      addAlert('error', 'PIN de autorización de administrador incorrecto.');
+      return;
+    }
+
+    const payload = {
+      venta_id: ventaEnDevolucion.id,
+      tipo: devolucionTipo,
+      pin: pinDevolucion,
+      motivo: motivoDevolucion
+    };
+
+    if (devolucionTipo === 'cambio') {
+      const detalles_devolucion = Object.entries(cantidadesDevueltas)
+        .map(([producto_id, cantidad]) => ({
+          producto_id: parseInt(producto_id),
+          cantidad: parseInt(cantidad)
+        }))
+        .filter(item => item.cantidad > 0);
+
+      if (detalles_devolucion.length === 0) {
+        addAlert('warning', 'Debe seleccionar al menos un producto a devolver.');
+        return;
+      }
+
+      const nuevos_items = itemsNuevos.map(item => ({
+        producto_id: item.id,
+        block_item: null, // Avoid typing non-existent fields
+        cantidad: item.cantidad
+      }));
+
+      payload.detalles_devolucion = detalles_devolucion;
+      payload.nuevos_items = nuevos_items;
+      payload.metodo_diferencia = metodoDiferencia;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL.replace('/inventario', '')}/inventario/devoluciones/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Token ${token}`
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        addAlert('success', data.mensaje || 'Devolución procesada con éxito.');
+        setShowDevolucionModal(false);
+        setShowHistorialModal(false);
+        fetchVentas();
+      } else {
+        addAlert('error', data.error || 'Error al procesar la devolución.');
+      }
+    } catch (error) {
+      console.error(error);
+      addAlert('error', 'Error de red al conectar con el servidor.');
     } finally {
       setLoading(false);
     }
@@ -932,6 +1047,11 @@ function POS() {
   const productosCoincidentes = productos.filter(p => 
     (p.nombre_completo || '').toLowerCase().includes(busquedaProdNombre.toLowerCase()) ||
     (p.codigo_barras || '').includes(busquedaProdNombre)
+  );
+
+  const productosCoincidentesDevolucion = productos.filter(p => 
+    (p.nombre_completo || '').toLowerCase().includes(busquedaDevolucionNombre.toLowerCase()) ||
+    (p.codigo_barras || '').includes(busquedaDevolucionNombre)
   );
 
   // Filtrar clientes en pantalla de clientes
@@ -1087,18 +1207,19 @@ function POS() {
   const totalVenta = cart.reduce((acc, item) => acc + item.cantidad * parseFloat(item.precio_venta), 0);
 
   // Calcular impuestos y desgloses para Checkout Paso 3
-  const subtotalNeto = totalVenta;
-  const iva = subtotalNeto * 0.16;
+  const totalConDescuento = Math.max(0, totalVenta - descuentoValor);
+  const subtotalNeto = totalConDescuento / 1.16;
+  const iva = totalConDescuento - subtotalNeto;
   
   let igtf = 0;
-  let totalUSD = subtotalNeto + iva;
+  let totalUSD = totalConDescuento;
   let restanteBs = 0;
   let errorMixto = '';
-  const maxUsdCash = (subtotalNeto + iva) / 0.97;
+  const maxUsdCash = descuentoValor > 0 ? totalConDescuento : totalConDescuento / 0.97;
 
   if (metodoPago === 'efectivo') {
-    igtf = (subtotalNeto + iva) * 0.03;
-    totalUSD = subtotalNeto + iva + igtf;
+    igtf = descuentoValor > 0 ? 0.00 : totalConDescuento * 0.03;
+    totalUSD = totalConDescuento + igtf;
   } else if (metodoPago === 'mixto') {
     const cashUsd = parseFloat(montoEfectivoUSDInput) || 0;
     if (cashUsd < 0) {
@@ -1106,14 +1227,14 @@ function POS() {
     } else if (cashUsd > maxUsdCash) {
       errorMixto = `Límite excedido (máx: $${maxUsdCash.toFixed(2)})`;
     }
-    igtf = cashUsd * 0.03;
-    totalUSD = subtotalNeto + iva + igtf;
+    igtf = descuentoValor > 0 ? 0.00 : cashUsd * 0.03;
+    totalUSD = totalConDescuento + igtf;
     const restanteUsd = Math.max(0, totalUSD - cashUsd);
     restanteBs = restanteUsd * tasaCambio;
   } else {
     // pago_movil o punto_venta
     igtf = 0;
-    totalUSD = subtotalNeto + iva;
+    totalUSD = totalConDescuento;
   }
 
   // --- CALCULOS DEL DASHBOARD ---
@@ -1583,7 +1704,7 @@ function POS() {
 
       {/* VISTA 2: INVENTARIO (CRUD) */}
       {currentView === 'inventario' && (
-        <main className="pos-main">
+        <main className="pos-main" id="inventario">
           {/* Listado de Productos */}
           <section className="cart-section">
             <div className="section-header">
@@ -2010,6 +2131,7 @@ function POS() {
                       <th>Cliente</th>
                       <th>Cédula / RIF</th>
                       <th>Método Pago</th>
+                      <th>Estado</th>
                       <th className="text-right">Total USD</th>
                       <th className="text-right">Total Bs.</th>
                       <th className="text-center">Acciones</th>
@@ -2025,6 +2147,19 @@ function POS() {
                         <td>
                           <span className="category-badge" style={{ textTransform: 'uppercase', fontSize: '0.8rem', color: 'var(--accent-info)', border: '1px solid var(--border-color)', padding: '2px 8px', borderRadius: '12px' }}>
                             {v.metodo_pago === 'mixto' ? 'Mixto' : v.metodo_pago.replace('_', ' ')}
+                          </span>
+                        </td>
+                        <td>
+                          <span style={{
+                            fontSize: '0.8rem',
+                            fontWeight: 'bold',
+                            padding: '2px 8px',
+                            borderRadius: '4px',
+                            backgroundColor: v.estado === 'anulada' ? 'rgba(239, 68, 68, 0.15)' : v.estado === 'con_cambios' ? 'rgba(234, 179, 8, 0.15)' : 'rgba(34, 197, 94, 0.15)',
+                            color: v.estado === 'anulada' ? 'var(--accent-danger)' : v.estado === 'con_cambios' ? 'var(--accent-warning)' : 'var(--accent-success)',
+                            border: `1px solid ${v.estado === 'anulada' ? 'rgba(239, 68, 68, 0.3)' : v.estado === 'con_cambios' ? 'rgba(234, 179, 8, 0.3)' : 'rgba(34, 197, 94, 0.3)'}`
+                          }}>
+                            {v.estado === 'anulada' ? 'Anulada' : v.estado === 'con_cambios' ? 'Con Cambios' : 'Completada'}
                           </span>
                         </td>
                         <td className="text-right subtotal-cell">${parseFloat(v.total).toFixed(2)}</td>
@@ -3012,7 +3147,8 @@ function POS() {
                     cliente_nombre: consumidorFinal ? 'Consumidor Final' : clienteNombre,
                     cliente_cedula_rif: consumidorFinal ? null : clienteCedulaRif,
                     cliente_telefono: consumidorFinal ? null : clienteTelefono,
-                    cliente_correo: null
+                    cliente_correo: null,
+                    descuento: descuentoValor
                   });
                 }} className="checkout-form-large">
                   
@@ -3035,8 +3171,21 @@ function POS() {
                       <h4 className="column-title">🧾 Detalle de Cobro</h4>
                       
                       <div className="invoice-rows">
+                        {descuentoValor > 0 && (
+                          <>
+                            <div className="invoice-row" style={{ color: 'var(--text-muted)' }}>
+                              <span>Subtotal Productos:</span>
+                              <span>${totalVenta.toFixed(2)}</span>
+                            </div>
+                            <div className="invoice-row" style={{ color: 'var(--accent-danger)', fontWeight: 'bold' }}>
+                              <span>Descuento Especial:</span>
+                              <span>-${descuentoValor.toFixed(2)}</span>
+                            </div>
+                            <div className="invoice-divider"></div>
+                          </>
+                        )}
                         <div className="invoice-row">
-                          <span>Subtotal Neto:</span>
+                          <span>Base Imponible (Neto):</span>
                           <b>${subtotalNeto.toFixed(2)}</b>
                         </div>
                         <div className="invoice-row">
@@ -3208,6 +3357,50 @@ function POS() {
                           </div>
                         </div>
                       )}
+                      
+                      {/* Descuento Especial */}
+                      <div className="discount-section" style={{ marginTop: '24px', paddingTop: '16px', borderTop: '1px dashed var(--border-color)' }}>
+                        <h5 style={{ margin: '0 0 10px 0', display: 'flex', alignItems: 'center', gap: '6px', color: '#ffffff', fontSize: '1rem' }}>🏷️ Descuento Especial ($)</h5>
+                        <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+                          {[1, 2, 5, 10].map((val) => (
+                            <button
+                              key={val}
+                              type="button"
+                              onClick={() => setDescuentoValor(val)}
+                              className="btn btn-secondary"
+                              style={{ flex: 1, padding: '8px', fontSize: '0.85rem', fontWeight: 'bold', border: descuentoValor === val ? '2px solid var(--accent-oil)' : '1px solid var(--border-color)' }}
+                            >
+                              ${val}
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => setDescuentoValor(0)}
+                            className="btn btn-secondary"
+                            style={{ padding: '8px 12px', fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--accent-danger)' }}
+                          >
+                            Quitar
+                          </button>
+                        </div>
+                        <div className="form-group-sm">
+                          <label>Otro Monto Fijo ($)</label>
+                          <div className="input-with-symbol">
+                            <span className="input-symbol">$</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max={totalVenta}
+                              placeholder="0.00"
+                              value={descuentoValor || ''}
+                              onChange={(e) => {
+                                const v = Math.min(totalVenta, Math.max(0, parseFloat(e.target.value) || 0));
+                                setDescuentoValor(v);
+                              }}
+                              style={{ width: '100%' }}
+                            />
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -3259,8 +3452,21 @@ function POS() {
                 ) : (
                   historialCliente.map((venta) => (
                     <div key={venta.id} className="history-item-card" style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px' }}>
-                      <div className="history-item-header" style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px', marginBottom: '12px' }}>
-                        <span className="sale-id" style={{ fontWeight: 'bold', color: 'var(--accent-oil)' }}>Venta #{venta.id}</span>
+                      <div className="history-item-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px', marginBottom: '12px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <span className="sale-id" style={{ fontWeight: 'bold', color: 'var(--accent-oil)' }}>Venta #{venta.id}</span>
+                          <span style={{
+                            fontSize: '0.75rem',
+                            fontWeight: 'bold',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            backgroundColor: venta.estado === 'anulada' ? 'rgba(239, 68, 68, 0.15)' : venta.estado === 'con_cambios' ? 'rgba(234, 179, 8, 0.15)' : 'rgba(34, 197, 94, 0.15)',
+                            color: venta.estado === 'anulada' ? 'var(--accent-danger)' : venta.estado === 'con_cambios' ? 'var(--accent-warning)' : 'var(--accent-success)',
+                            border: `1px solid ${venta.estado === 'anulada' ? 'rgba(239, 68, 68, 0.3)' : venta.estado === 'con_cambios' ? 'rgba(234, 179, 8, 0.3)' : 'rgba(34, 197, 94, 0.3)'}`
+                          }}>
+                            {venta.estado === 'anulada' ? 'Anulada' : venta.estado === 'con_cambios' ? 'Con Cambios' : 'Completada'}
+                          </span>
+                        </div>
                         <span className="sale-date" style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>{new Date(venta.fecha).toLocaleString()}</span>
                       </div>
                       <div className="history-item-details">
@@ -3317,8 +3523,21 @@ function POS() {
                             </div>
                           </div>
 
-                          <div className="history-totals" style={{ textAlign: 'right', minWidth: '160px' }}>
+                          <div className="history-totals" style={{ textAlign: 'right', minWidth: '180px' }}>
                             <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                              {parseFloat(venta.descuento || 0) > 0 && (
+                                  <>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                                      <span>Subtotal original:</span>
+                                      <span>${(parseFloat(venta.total) - parseFloat(venta.igtf) + parseFloat(venta.descuento)).toFixed(2)}</span>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', color: 'var(--accent-danger)', fontWeight: 'bold' }}>
+                                      <span>Descuento:</span>
+                                      <span>-${parseFloat(venta.descuento).toFixed(2)}</span>
+                                    </div>
+                                    <div style={{ borderTop: '1px dashed var(--border-color)', margin: '4px 0' }}></div>
+                                  </>
+                              )}
                               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
                                 <span>Subtotal Neto:</span>
                                 <span>${(parseFloat(venta.total) - parseFloat(venta.iva) - parseFloat(venta.igtf)).toFixed(2)}</span>
@@ -3342,6 +3561,24 @@ function POS() {
                             <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
                               Tasa cobrada: <b>Bs. {parseFloat(venta.tasa_cambio || 1.00).toFixed(2)}</b>
                             </div>
+                            {venta.estado !== 'anulada' && (
+                              <button
+                                className="btn btn-secondary"
+                                onClick={() => abrirModalDevolucion(venta)}
+                                style={{
+                                  marginTop: '12px',
+                                  backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                  border: '1px solid var(--accent-danger)',
+                                  color: 'var(--accent-danger)',
+                                  fontWeight: 'bold',
+                                  fontSize: '0.85rem',
+                                  width: '100%',
+                                  padding: '8px'
+                                }}
+                              >
+                                🔄 Devolución / Canje
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -3358,6 +3595,394 @@ function POS() {
           </div>
         </div>
       )}
+
+      {/* Modal de Devolución / Cambio de Productos */}
+      {showDevolucionModal && ventaEnDevolucion && (() => {
+        const totalBrutoOrig = ventaEnDevolucion.detalles.reduce((acc, det) => acc + parseFloat(det.precio_unitario) * det.cantidad, 0);
+        const factorDescuento = totalBrutoOrig > 0 ? (totalBrutoOrig - parseFloat(ventaEnDevolucion.descuento || 0)) / totalBrutoOrig : 1.00;
+        
+        const totalDescontadoOrig = Math.max(0, totalBrutoOrig - parseFloat(ventaEnDevolucion.descuento || 0));
+        const factorIgtf = totalDescontadoOrig > 0 ? parseFloat(ventaEnDevolucion.igtf || 0) / totalDescontadoOrig : 0;
+
+        const saldoFavorUSD = ventaEnDevolucion.detalles.reduce((acc, det) => {
+          const cantDev = cantidadesDevueltas[det.producto.id] || 0;
+          return acc + (parseFloat(det.precio_unitario) * cantDev) * factorDescuento * (1 + factorIgtf);
+        }, 0);
+        
+        const saldoFavorBS = saldoFavorUSD * parseFloat(ventaEnDevolucion.tasa_cambio);
+        const totalNuevosUSD = itemsNuevos.reduce((acc, item) => acc + parseFloat(item.precio_venta) * item.cantidad, 0);
+        const diferenciaUSD = totalNuevosUSD - saldoFavorUSD;
+        
+        let diferenciaBS = 0;
+        if (diferenciaUSD > 0) {
+          diferenciaBS = diferenciaUSD * tasaCambio;
+        } else if (diferenciaUSD < 0) {
+          diferenciaBS = Math.abs(diferenciaUSD) * parseFloat(ventaEnDevolucion.tasa_cambio);
+        }
+
+        return (
+          <div className="modal-backdrop">
+            <div className="modal-content modal-devolucion" style={{ width: '980px', maxWidth: '95%', maxHeight: '92vh', display: 'flex', flexDirection: 'column' }}>
+              <div className="modal-header">
+                <h2>Procesar Devolución o Canje — Factura #{ventaEnDevolucion.id}</h2>
+                <button className="btn-close" onClick={() => setShowDevolucionModal(false)}>×</button>
+              </div>
+              <form onSubmit={handleProcesarDevolucion} style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+                <div className="modal-body" style={{ overflowY: 'auto', flex: 1, padding: '20px' }}>
+                  
+                  <div style={{ display: 'flex', gap: '16px', marginBottom: '20px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '1.05rem', fontWeight: 'bold' }}>
+                      <input
+                        type="radio"
+                        name="devolucionTipo"
+                        value="anulacion"
+                        checked={devolucionTipo === 'anulacion'}
+                        onChange={() => setDevolucionTipo('anulacion')}
+                        style={{ width: '18px', height: '18px' }}
+                      />
+                      ❌ Anulación Completa (Devolver Dinero)
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '1.05rem', fontWeight: 'bold' }}>
+                      <input
+                        type="radio"
+                        name="devolucionTipo"
+                        value="cambio"
+                        checked={devolucionTipo === 'cambio'}
+                        onChange={() => setDevolucionTipo('cambio')}
+                        style={{ width: '18px', height: '18px' }}
+                      />
+                      🔄 Cambio de Producto (Canje)
+                    </label>
+                  </div>
+
+                  {devolucionTipo === 'anulacion' ? (
+                    <>
+                      <div style={{ backgroundColor: 'rgba(239, 68, 68, 0.05)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: '8px', padding: '16px', marginBottom: '20px' }}>
+                        <h4 style={{ margin: '0 0 8px 0', color: 'var(--accent-danger)' }}>⚠️ Alerta de Anulación Completa</h4>
+                        <p style={{ margin: 0, fontSize: '0.95rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                          Se devolverán todos los productos de esta factura al stock del inventario. El monto total de <b>${parseFloat(ventaEnDevolucion.total).toFixed(2)}</b> (Bs. {(parseFloat(ventaEnDevolucion.total) * parseFloat(ventaEnDevolucion.tasa_cambio)).toFixed(2)}) se registrará como un egreso de caja el día de hoy a la tasa original de <b>Bs. {parseFloat(ventaEnDevolucion.tasa_cambio).toFixed(2)}</b>.
+                        </p>
+                        <p style={{ margin: 0, fontSize: '0.95rem', color: 'var(--text-muted)' }}>
+                          <b>Método de Pago Original:</b> <span style={{ textTransform: 'uppercase', fontWeight: 'bold', color: 'var(--accent-info)' }}>{ventaEnDevolucion.metodo_pago === 'mixto' ? 'Pago Mixto (USD + Bs)' : ventaEnDevolucion.metodo_pago.replace('_', ' ')}</span>
+                        </p>
+                      </div>
+
+                      <div style={{ border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px', backgroundColor: 'var(--bg-tertiary)', marginBottom: '20px' }}>
+                        <h4 style={{ margin: '0 0 12px 0', color: 'var(--accent-danger)', borderBottom: '1px solid var(--border-color)', paddingBottom: '6px' }}>
+                          🧾 Productos a Devolver (Detalle de Factura)
+                        </h4>
+                        <table className="cart-table mini-table" style={{ width: '100%', fontSize: '0.9rem' }}>
+                          <thead>
+                            <tr>
+                              <th>Producto</th>
+                              <th className="text-center">Cantidad</th>
+                              <th className="text-right">Precio Original</th>
+                              <th className="text-right">Precio Real Cobrado</th>
+                              <th className="text-right">Subtotal Real</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {ventaEnDevolucion.detalles.map((det) => {
+                              const precioPagado = parseFloat(det.precio_unitario) * factorDescuento * (1 + factorIgtf);
+                              return (
+                                <tr key={det.id}>
+                                  <td>{det.producto.nombre_completo}</td>
+                                  <td className="text-center">{det.cantidad}</td>
+                                  <td className="text-right">${parseFloat(det.precio_unitario).toFixed(2)}</td>
+                                  <td className="text-right" style={{ color: 'var(--accent-success)', fontWeight: 'bold' }}>
+                                    ${precioPagado.toFixed(2)}
+                                  </td>
+                                  <td className="text-right" style={{ fontWeight: 'bold' }}>
+                                    ${(precioPagado * det.cantidad).toFixed(2)}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                        {parseFloat(ventaEnDevolucion.descuento || 0) > 0 && (
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '12px', fontSize: '0.9rem', color: 'var(--accent-danger)', fontWeight: 'bold' }}>
+                            <span>Descuento aplicado en factura original: -${parseFloat(ventaEnDevolucion.descuento).toFixed(2)}</span>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+                      <div style={{ border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px', backgroundColor: 'var(--bg-tertiary)' }}>
+                        <h4 style={{ margin: '0 0 12px 0', color: 'var(--accent-oil)', borderBottom: '1px solid var(--border-color)', paddingBottom: '6px' }}>
+                          📤 1. Productos que Devuelve el Cliente
+                        </h4>
+                        <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '10px' }}>
+                          Método de Pago Original: <span style={{ textTransform: 'uppercase', fontWeight: 'bold', color: 'var(--accent-info)' }}>{ventaEnDevolucion.metodo_pago === 'mixto' ? 'Pago Mixto (USD + Bs)' : ventaEnDevolucion.metodo_pago.replace('_', ' ')}</span>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                          {ventaEnDevolucion.detalles.map((det) => (
+                            <div key={det.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                              <div style={{ flex: 1, marginRight: '10px' }}>
+                                <span style={{ fontSize: '0.95rem', fontWeight: 'bold' }}>{det.producto.nombre_completo}</span><br />
+                                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                                  Precio Orig: ${parseFloat(det.precio_unitario).toFixed(2)} 
+                                  {(parseFloat(ventaEnDevolucion.descuento || 0) > 0 || parseFloat(ventaEnDevolucion.igtf || 0) > 0) && ` (Pagado: $${(parseFloat(det.precio_unitario) * factorDescuento * (1 + factorIgtf)).toFixed(2)})`} 
+                                  | Vendido: {det.cantidad}
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Cant:</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max={det.cantidad}
+                                  value={cantidadesDevueltas[det.producto.id] || 0}
+                                  onChange={(e) => {
+                                    const val = Math.min(det.cantidad, Math.max(0, parseInt(e.target.value) || 0));
+                                    setCantidadesDevueltas(prev => ({ ...prev, [det.producto.id]: val }));
+                                  }}
+                                  style={{
+                                    width: '60px',
+                                    padding: '6px',
+                                    borderRadius: '6px',
+                                    border: '1px solid var(--border-color)',
+                                    backgroundColor: 'var(--bg-tertiary)',
+                                    color: 'var(--text-main)',
+                                    textAlign: 'center'
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div style={{ marginTop: '16px', paddingTop: '12px', borderTop: '1px dashed var(--border-color)', display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
+                          <span>Saldo a Favor del Cliente:</span>
+                          <div style={{ textAlign: 'right' }}>
+                            <span style={{ color: 'var(--accent-success)', fontSize: '1.2rem' }}>${saldoFavorUSD.toFixed(2)}</span><br />
+                            <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Bs. {saldoFavorBS.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px', backgroundColor: 'var(--bg-tertiary)' }}>
+                        <h4 style={{ margin: '0 0 12px 0', color: 'var(--accent-info)', borderBottom: '1px solid var(--border-color)', paddingBottom: '6px' }}>
+                          📥 2. Nuevos Productos que se Lleva
+                        </h4>
+                        
+                        <div style={{ position: 'relative', marginBottom: '12px' }}>
+                          <input
+                            type="text"
+                            placeholder="Buscar producto por nombre o código..."
+                            value={busquedaDevolucionNombre}
+                            onChange={(e) => setBusquedaDevolucionNombre(e.target.value)}
+                            style={{
+                              width: '100%',
+                              padding: '10px',
+                              borderRadius: '6px',
+                              backgroundColor: 'var(--bg-primary)',
+                              color: 'var(--text-main)',
+                              border: '1px solid var(--border-color)',
+                              outline: 'none'
+                            }}
+                          />
+                          {busquedaDevolucionNombre.trim() !== '' && (
+                            <div style={{
+                              position: 'absolute',
+                              top: '100%',
+                              left: 0,
+                              right: 0,
+                              backgroundColor: 'var(--bg-primary)',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: '0 0 6px 6px',
+                              maxHeight: '150px',
+                              overflowY: 'auto',
+                              zIndex: 100,
+                              boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                            }}>
+                              {productosCoincidentesDevolucion.length === 0 ? (
+                                <div style={{ padding: '8px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>No se encontraron productos</div>
+                              ) : (
+                                productosCoincidentesDevolucion.map((prod) => (
+                                  <div
+                                    key={prod.id}
+                                    onClick={() => {
+                                      addProductToExchange(prod);
+                                      setBusquedaDevolucionNombre('');
+                                    }}
+                                    style={{
+                                      padding: '8px 12px',
+                                      cursor: 'pointer',
+                                      borderBottom: '1px solid var(--border-color)',
+                                      fontSize: '0.9rem',
+                                      display: 'flex',
+                                      justifyContent: 'space-between',
+                                      backgroundColor: 'var(--bg-primary)'
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-secondary)'}
+                                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-primary)'}
+                                  >
+                                    <span>{prod.nombre_completo}</span>
+                                    <b style={{ color: 'var(--accent-oil)' }}>${parseFloat(prod.precio_venta).toFixed(2)}</b>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minHeight: '120px', maxHeight: '180px', overflowY: 'auto', marginBottom: '12px' }}>
+                          {itemsNuevos.length === 0 ? (
+                            <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.9rem', margin: '40px 0' }}>Agregue productos que se llevará el cliente en reemplazo</p>
+                          ) : (
+                            itemsNuevos.map((item) => (
+                              <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                                <div style={{ flex: 1, marginRight: '10px' }}>
+                                  <span style={{ fontSize: '0.9rem', fontWeight: 'bold' }}>{item.nombre_completo}</span><br />
+                                  <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Precio: ${parseFloat(item.precio_venta).toFixed(2)}</span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    value={item.cantidad}
+                                    onChange={(e) => updateQuantityExchange(item.id, e.target.value)}
+                                    style={{
+                                      width: '50px',
+                                      padding: '4px',
+                                      borderRadius: '4px',
+                                      border: '1px solid var(--border-color)',
+                                      backgroundColor: 'var(--bg-tertiary)',
+                                      color: 'var(--text-main)',
+                                      textAlign: 'center'
+                                    }}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => removeProductFromExchange(item.id)}
+                                    style={{
+                                      border: 'none',
+                                      background: 'none',
+                                      color: 'var(--accent-danger)',
+                                      cursor: 'pointer',
+                                      fontSize: '1.1rem'
+                                    }}
+                                  >
+                                    🗑️
+                                  </button>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+
+                        <div style={{ paddingTop: '12px', borderTop: '1px dashed var(--border-color)', display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
+                          <span>Total Nuevos Productos (Hoy):</span>
+                          <span style={{ color: 'var(--accent-info)', fontSize: '1.2rem' }}>${totalNuevosUSD.toFixed(2)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {devolucionTipo === 'cambio' && (
+                    <div style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px', marginBottom: '20px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+                        <div>
+                          <h4 style={{ margin: '0 0 4px 0', fontSize: '1.05rem', color: '#ffffff' }}>💵 Balance de Diferencia:</h4>
+                          <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                            {diferenciaUSD > 0 
+                              ? `El cliente debe pagar una diferencia a la tasa de hoy (Bs. ${tasaCambio.toFixed(2)})`
+                              : diferenciaUSD < 0
+                              ? `Se debe devolver vuelto al cliente a la tasa histórica (Bs. ${parseFloat(ventaEnDevolucion.tasa_cambio).toFixed(2)})`
+                              : 'Canje de igual valor. No hay intercambio de dinero.'
+                            }
+                          </p>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <span style={{ 
+                            fontSize: '1.8rem', 
+                            fontWeight: '800', 
+                            color: diferenciaUSD > 0 ? 'var(--accent-danger)' : diferenciaUSD < 0 ? 'var(--accent-success)' : 'var(--text-muted)'
+                          }}>
+                            {diferenciaUSD > 0 ? `+ $${diferenciaUSD.toFixed(2)}` : diferenciaUSD < 0 ? `- $${Math.abs(diferenciaUSD).toFixed(2)}` : '$0.00'}
+                          </span><br />
+                          <b style={{ fontSize: '1.1rem', color: 'var(--text-main)' }}>
+                            {diferenciaUSD > 0 ? `Bs. ${diferenciaBS.toFixed(2)}` : diferenciaUSD < 0 ? `Bs. ${diferenciaBS.toFixed(2)}` : 'Bs. 0.00'}
+                          </b>
+                        </div>
+                      </div>
+
+                      {diferenciaUSD !== 0 && (
+                        <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '0.9rem', fontWeight: 'bold' }}>
+                            {diferenciaUSD > 0 ? 'Cobrar diferencia mediante:' : 'Reembolsar vuelto mediante:'}
+                          </span>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            {['efectivo', 'pago_movil', 'punto_venta'].map((m) => {
+                              if (diferenciaUSD < 0 && m === 'punto_venta') return null;
+                              return (
+                                <button
+                                  key={m}
+                                  type="button"
+                                  onClick={() => setMetodoDiferencia(m)}
+                                  style={{
+                                    padding: '6px 12px',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: '6px',
+                                    cursor: 'pointer',
+                                    fontSize: '0.85rem',
+                                    backgroundColor: metodoDiferencia === m ? 'var(--accent-oil)' : 'var(--bg-primary)',
+                                    color: metodoDiferencia === m ? '#000000' : 'var(--text-main)',
+                                    borderColor: metodoDiferencia === m ? 'var(--accent-oil)' : 'var(--border-color)',
+                                    fontWeight: 'bold'
+                                  }}
+                                >
+                                  {m === 'efectivo' ? '💵 Efectivo (USD)' : m === 'pago_movil' ? '📱 Pago Móvil' : '💳 Punto de Venta'}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '20px', marginTop: '12px' }}>
+                    <div className="form-group-sm" style={{ flex: 1.5 }}>
+                      <label>Motivo de la Devolución o Canje</label>
+                      <input
+                        type="text"
+                        placeholder="Ej: Repuesto equivocado, pieza defectuosa..."
+                        value={motivoDevolucion}
+                        onChange={(e) => setMotivoDevolucion(e.target.value)}
+                        required
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                    <div className="form-group-sm" style={{ flex: 1 }}>
+                      <label>🔑 PIN de Seguridad de Administrador</label>
+                      <input
+                        type="password"
+                        placeholder="PIN"
+                        value={pinDevolucion}
+                        onChange={(e) => setPinDevolucion(e.target.value)}
+                        required
+                        style={{ width: '100%', letterSpacing: '4px', textAlign: 'center', fontWeight: 'bold' }}
+                      />
+                    </div>
+                  </div>
+
+                </div>
+                <div className="modal-footer" style={{ borderTop: '1px solid var(--border-color)', padding: '16px', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowDevolucionModal(false)}>
+                    Cancelar
+                  </button>
+                  <button type="submit" className="btn btn-primary" style={{ backgroundColor: 'var(--accent-danger)', borderColor: 'var(--accent-danger)' }} disabled={loading}>
+                    {loading ? 'Procesando...' : devolucionTipo === 'anulacion' ? 'Anular Factura Completa' : 'Confirmar Cambio de Producto'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Modal de Edición de Cliente */}
       {showEditClienteModal && editCliente && (

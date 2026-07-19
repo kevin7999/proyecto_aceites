@@ -4,6 +4,8 @@ from django.utils import timezone
 from datetime import datetime, time
 from django.conf import settings
 from django.db.models import Sum, F
+from django.db import transaction
+from decimal import Decimal
 from rest_framework import status, viewsets
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -12,8 +14,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.authtoken.models import Token
 
-from .models import Producto, Venta, DetalleVenta, CierreCaja
-from .serializers import ProductoSerializer, VentaSerializer, CierreCajaSerializer
+from .models import Producto, Venta, DetalleVenta, CierreCaja, Devolucion, DetalleDevolucion, DetalleCambioNuevo
+from .serializers import ProductoSerializer, VentaSerializer, CierreCajaSerializer, DevolucionSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -46,49 +48,131 @@ class RegistrarVentaView(ListCreateAPIView):
     serializer_class = VentaSerializer
 
 
-def enviar_cierre_n8n(ventas_hoy, fecha_cierre):
-    """
-    Agrupa los datos de ventas del día actual y los envía a n8n.
-    Retorna (success_bool, message_str)
-    """
-    # Suma total acumulada
-    total_acumulado = ventas_hoy.aggregate(total=Sum('total'))['total'] or 0
-    total_acumulado = float(total_acumulado)
+def calcular_cierre_hoy_valores(hoy):
+    inicio_dia = timezone.make_aware(datetime.combine(hoy, time.min))
+    fin_dia = timezone.make_aware(datetime.combine(hoy, time.max))
 
-    # Detalle de todos los productos vendidos
-    detalles_hoy = DetalleVenta.objects.filter(venta__in=ventas_hoy)
+    # Obtener ventas de hoy validas y devoluciones de hoy
+    ventas_hoy = Venta.objects.filter(fecha__range=(inicio_dia, fin_dia))
+    ventas_validas = ventas_hoy.filter(estado__in=['completada', 'con_cambios'])
+    devoluciones_hoy = Devolucion.objects.filter(fecha__range=(inicio_dia, fin_dia))
+
+    # Total ventas brutas (USD)
+    total_ventas_usd = Decimal(str(ventas_validas.aggregate(total=Sum('total'))['total'] or 0))
+    # Suma de diferencias de devoluciones (USD)
+    total_devoluciones_usd = Decimal(str(devoluciones_hoy.aggregate(total=Sum('diferencia_usd'))['total'] or 0))
     
+    total_acumulado = float(total_ventas_usd + total_devoluciones_usd)
+
     # Cantidad total de envases/unidades vendidas
-    total_unidades = detalles_hoy.aggregate(cant=Sum('cantidad'))['cant'] or 0
+    unidades_vendidas = DetalleVenta.objects.filter(venta__in=ventas_validas).aggregate(cant=Sum('cantidad'))['cant'] or 0
+    unidades_devueltas = DetalleDevolucion.objects.filter(devolucion__in=devoluciones_hoy).aggregate(cant=Sum('cantidad'))['cant'] or 0
+    unidades_nuevas = DetalleCambioNuevo.objects.filter(devolucion__in=devoluciones_hoy).aggregate(cant=Sum('cantidad'))['cant'] or 0
     
-    # Agrupación por producto
-    productos_vendidos_agg = (
-        detalles_hoy
-        .values('producto__codigo_barras', 'producto__nombre_completo')
-        .annotate(
-            cantidad_total=Sum('cantidad'),
-            monto_total=Sum(F('cantidad') * F('precio_unitario'))
-        )
-    )
+    total_unidades = int(unidades_vendidas - unidades_devueltas + unidades_nuevas)
 
-    desglose = []
-    for item in productos_vendidos_agg:
-        desglose.append({
-            "codigo_barras": item['producto__codigo_barras'],
-            "nombre_completo": item['producto__nombre_completo'],
-            "cantidad_vendida": item['cantidad_total'],
-            "monto_generado": float(item['monto_total'])
-        })
+    # 1. Efectivo USD
+    efectivo_ventas_total = Decimal(str(ventas_validas.filter(metodo_pago='efectivo').aggregate(total=Sum('total'))['total'] or 0))
+    efectivo_mixtas_total = Decimal(str(ventas_validas.filter(metodo_pago='mixto').aggregate(total=Sum(F('monto_efectivo_usd') * Decimal('1.03')))['total'] or 0))
+    efectivo_devoluciones_total = Decimal(str(devoluciones_hoy.filter(metodo_diferencia='efectivo').aggregate(total=Sum('diferencia_usd'))['total'] or 0))
+    
+    efectivo_usd = float(efectivo_ventas_total + efectivo_mixtas_total + efectivo_devoluciones_total)
 
-    # Desglose de pagos por método
-    desglose_pagos = {
-        'efectivo': float(ventas_hoy.filter(metodo_pago='efectivo').aggregate(total=Sum('total'))['total'] or 0),
-        'pago_movil': float(ventas_hoy.filter(metodo_pago='pago_movil').aggregate(total=Sum('total'))['total'] or 0),
-        'punto_venta': float(ventas_hoy.filter(metodo_pago='punto_venta').aggregate(total=Sum('total'))['total'] or 0)
+    # 2. Pago Móvil
+    pago_movil_ventas_total = Decimal(str(ventas_validas.filter(metodo_pago='pago_movil').aggregate(total=Sum('total'))['total'] or 0))
+    pago_movil_mixtas_total = Decimal('0.00')
+    for v in ventas_validas.filter(metodo_pago='mixto', metodo_pago_restante='pago_movil'):
+        pago_movil_mixtas_total += v.total - (v.monto_efectivo_usd * Decimal('1.03'))
+    pago_movil_devoluciones_total = Decimal(str(devoluciones_hoy.filter(metodo_diferencia='pago_movil').aggregate(total=Sum('diferencia_usd'))['total'] or 0))
+    
+    pago_movil_usd = float(pago_movil_ventas_total + pago_movil_mixtas_total + pago_movil_devoluciones_total)
+
+    # 3. Punto de Venta
+    punto_venta_ventas_total = Decimal(str(ventas_validas.filter(metodo_pago='punto_venta').aggregate(total=Sum('total'))['total'] or 0))
+    punto_venta_mixtas_total = Decimal('0.00')
+    for v in ventas_validas.filter(metodo_pago='mixto', metodo_pago_restante='punto_venta'):
+        punto_venta_mixtas_total += v.total - (v.monto_efectivo_usd * Decimal('1.03'))
+    punto_venta_devoluciones_total = Decimal(str(devoluciones_hoy.filter(metodo_diferencia='punto_venta').aggregate(total=Sum('diferencia_usd'))['total'] or 0))
+    
+    punto_venta_usd = float(punto_venta_ventas_total + punto_venta_mixtas_total + punto_venta_devoluciones_total)
+
+    return total_acumulado, total_unidades, {
+        'efectivo': efectivo_usd,
+        'pago_movil': pago_movil_usd,
+        'punto_venta': punto_venta_usd
     }
 
+
+def enviar_cierre_n8n(hoy):
+    """
+    Agrupa los datos de ventas y devoluciones del día y los envía a n8n.
+    Retorna (success_bool, message_str)
+    """
+    inicio_dia = timezone.make_aware(datetime.combine(hoy, time.min))
+    fin_dia = timezone.make_aware(datetime.combine(hoy, time.max))
+
+    ventas_hoy = Venta.objects.filter(fecha__range=(inicio_dia, fin_dia))
+    ventas_validas = ventas_hoy.filter(estado__in=['completada', 'con_cambios'])
+    devoluciones_hoy = Devolucion.objects.filter(fecha__range=(inicio_dia, fin_dia))
+
+    total_acumulado, total_unidades, desglose_pagos = calcular_cierre_hoy_valores(hoy)
+
+    # Agrupación por producto
+    agg = {}
+    detalles_hoy = DetalleVenta.objects.filter(venta__in=ventas_validas)
+    for item in detalles_hoy:
+        prod = item.producto
+        key = prod.id
+        if key not in agg:
+            agg[key] = {
+                "codigo_barras": prod.codigo_barras,
+                "nombre_completo": prod.nombre_completo,
+                "cantidad_vendida": 0,
+                "monto_generado": Decimal('0.00')
+            }
+        agg[key]["cantidad_vendida"] += item.cantidad
+        agg[key]["monto_generado"] += item.precio_unitario * item.cantidad
+
+    detalles_devueltos = DetalleDevolucion.objects.filter(devolucion__in=devoluciones_hoy)
+    for item in detalles_devueltos:
+        prod = item.producto_devuelto
+        key = prod.id
+        if key not in agg:
+            agg[key] = {
+                "codigo_barras": prod.codigo_barras,
+                "nombre_completo": prod.nombre_completo,
+                "cantidad_vendida": 0,
+                "monto_generado": Decimal('0.00')
+            }
+        agg[key]["cantidad_vendida"] -= item.cantidad
+        agg[key]["monto_generado"] -= item.precio_original_usd * item.cantidad
+
+    detalles_nuevos = DetalleCambioNuevo.objects.filter(devolucion__in=devoluciones_hoy)
+    for item in detalles_nuevos:
+        prod = item.producto_nuevo
+        key = prod.id
+        if key not in agg:
+            agg[key] = {
+                "codigo_barras": prod.codigo_barras,
+                "nombre_completo": prod.nombre_completo,
+                "cantidad_vendida": 0,
+                "monto_generado": Decimal('0.00')
+            }
+        agg[key]["cantidad_vendida"] += item.cantidad
+        agg[key]["monto_generado"] += item.precio_venta_usd * item.cantidad
+
+    desglose = []
+    for k, v in agg.items():
+        if v["cantidad_vendida"] != 0 or v["monto_generado"] != 0:
+            desglose.append({
+                "codigo_barras": v["codigo_barras"],
+                "nombre_completo": v["nombre_completo"],
+                "cantidad_vendida": v["cantidad_vendida"],
+                "monto_generado": float(v["monto_generado"])
+            })
+
     payload = {
-        "fecha": fecha_cierre.strftime("%Y-%m-%d"),
+        "fecha": hoy.strftime("%Y-%m-%d"),
         "monto_acumulado": total_acumulado,
         "productos_vendidos_count": total_unidades,
         "desglose_productos": desglose,
@@ -97,7 +181,6 @@ def enviar_cierre_n8n(ventas_hoy, fecha_cierre):
 
     url = settings.N8N_WEBHOOK_URL
     try:
-        # Enviar petición con timeout corto (5s) para no bloquear el hilo si está offline
         response = requests.post(url, json=payload, timeout=5)
         if response.status_code >= 200 and response.status_code < 300:
             return True, "Cierre enviado exitosamente a n8n."
@@ -116,35 +199,27 @@ class CierreDiarioView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        # Obtener rango del día local
         ahora = timezone.localtime(timezone.now())
         hoy = ahora.date()
         
         inicio_dia = timezone.make_aware(datetime.combine(hoy, time.min))
         fin_dia = timezone.make_aware(datetime.combine(hoy, time.max))
 
-        # Obtener ventas de hoy
+        # Obtener ventas de hoy y devoluciones de hoy
         ventas_hoy = Venta.objects.filter(fecha__range=(inicio_dia, fin_dia))
+        devoluciones_hoy = Devolucion.objects.filter(fecha__range=(inicio_dia, fin_dia))
         
-        if not ventas_hoy.exists():
+        if not ventas_hoy.exists() and not devoluciones_hoy.exists():
             return Response(
-                {"mensaje": "No se registraron ventas en el día de hoy. No hay datos para enviar."},
+                {"mensaje": "No se registraron ventas ni devoluciones hoy. No hay datos para enviar."},
                 status=status.HTTP_200_OK
             )
 
-        # Calcular totales para guardar y devolver en la respuesta HTTP
-        total_acumulado = float(ventas_hoy.aggregate(total=Sum('total'))['total'] or 0)
-        total_unidades = DetalleVenta.objects.filter(venta__in=ventas_hoy).aggregate(cant=Sum('cantidad'))['cant'] or 0
-
-        # Desglose de pagos por método
-        desglose_pagos = {
-            'efectivo': float(ventas_hoy.filter(metodo_pago='efectivo').aggregate(total=Sum('total'))['total'] or 0),
-            'pago_movil': float(ventas_hoy.filter(metodo_pago='pago_movil').aggregate(total=Sum('total'))['total'] or 0),
-            'punto_venta': float(ventas_hoy.filter(metodo_pago='punto_venta').aggregate(total=Sum('total'))['total'] or 0)
-        }
+        # Calcular totales desglosados
+        total_acumulado, total_unidades, desglose_pagos = calcular_cierre_hoy_valores(hoy)
 
         # Enviar datos a n8n
-        exito, mensaje = enviar_cierre_n8n(ventas_hoy, hoy)
+        exito, mensaje = enviar_cierre_n8n(hoy)
 
         # Obtener tasa de cambio aplicada en la última venta de hoy
         tasa_del_dia = 1.00
@@ -801,6 +876,207 @@ class ImportarProductosView(APIView):
             "actualizados": actualizados,
             "errores": errores
         }, status=status.HTTP_200_OK)
+
+
+class DevolucionView(APIView):
+    """
+    Endpoint POST '/api/inventario/devoluciones/'
+    Procesa anulaciones completas o canjes de productos.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        pin = request.data.get('pin')
+        if str(pin) != '7804':
+            return Response({"error": "PIN de autorización incorrecto."}, status=status.HTTP_403_FORBIDDEN)
+
+        venta_id = request.data.get('venta_id')
+        tipo = request.data.get('tipo', 'anulacion')  # 'anulacion' o 'cambio'
+        motivo = request.data.get('motivo', '')
+        
+        try:
+            venta = Venta.objects.get(id=venta_id)
+        except Venta.DoesNotExist:
+            return Response({"error": "Venta no encontrada."}, status=status.HTTP_404_NOT_FOUND)
+
+        if venta.estado == 'anulada':
+            return Response({"error": "Esta venta ya fue anulada."}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            if tipo == 'anulacion':
+                # Reintegrar todo el stock
+                for detail in venta.detalles.all():
+                    prod = detail.producto
+                    prod.stock_actual += detail.cantidad
+                    prod.save()
+
+                # Crear registro de Devolución
+                devolucion = Devolucion.objects.create(
+                    venta=venta,
+                    tipo='anulacion',
+                    monto_saldo_favor_usd=venta.total,
+                    monto_saldo_favor_bs=venta.total * venta.tasa_cambio,
+                    diferencia_usd=-venta.total,
+                    metodo_diferencia=venta.metodo_pago,
+                    motivo=motivo
+                )
+
+                # Crear detalles
+                for detail in venta.detalles.all():
+                    DetalleDevolucion.objects.create(
+                        devolucion=devolucion,
+                        producto_devuelto=detail.producto,
+                        cantidad=detail.cantidad,
+                        precio_original_usd=detail.precio_unitario
+                    )
+
+                venta.estado = 'anulada'
+                venta.save()
+
+                self.actualizar_cierre_diario(devolucion)
+
+                return Response({"mensaje": "Venta anulada exitosamente.", "devolucion_id": devolucion.id}, status=status.HTTP_201_CREATED)
+
+            elif tipo == 'cambio':
+                items_devueltos_req = request.data.get('detalles_devolucion', [])
+                items_nuevos_req = request.data.get('nuevos_items', [])
+
+                if not items_devueltos_req:
+                    return Response({"error": "Debe especificar al menos un producto a devolver."}, status=status.HTTP_400_BAD_REQUEST)
+
+                # Validar cantidades devueltas
+                devueltos_previos = {}
+                for d in Devolucion.objects.filter(venta=venta):
+                    for d_detail in d.detalles.all():
+                        pid = d_detail.producto_devuelto.id
+                        devueltos_previos[pid] = devueltos_previos.get(pid, 0) + d_detail.cantidad
+
+                vendidos_orig = {detail.producto.id: detail for detail in venta.detalles.all()}
+
+                # Factor de descuento e IGTF
+                total_bruto_orig = sum(detail.precio_unitario * detail.cantidad for detail in venta.detalles.all())
+                factor_descuento = Decimal('1.00')
+                if total_bruto_orig > 0:
+                    factor_descuento = (total_bruto_orig - venta.descuento) / total_bruto_orig
+
+                total_descontado_orig = max(Decimal('0.00'), total_bruto_orig - venta.descuento)
+                factor_igtf = Decimal('0.00')
+                if total_descontado_orig > 0:
+                    factor_igtf = venta.igtf / total_descontado_orig
+
+                monto_saldo_favor_usd = Decimal('0.00')
+                detalles_devolucion_insts = []
+
+                for item in items_devueltos_req:
+                    pid = int(item['producto_id'])
+                    cant = int(item['cantidad'])
+                    if cant <= 0:
+                        continue
+
+                    if pid not in vendidos_orig:
+                        return Response({"error": f"El producto {pid} no pertenece a la venta original."}, status=status.HTTP_400_BAD_REQUEST)
+
+                    detail_orig = vendidos_orig[pid]
+                    max_permitido = detail_orig.cantidad - devueltos_previos.get(pid, 0)
+                    if cant > max_permitido:
+                        return Response({"error": f"Cantidad a devolver excedida para {detail_orig.producto.nombre_completo} (máximo disponible: {max_permitido})."}, status=status.HTTP_400_BAD_REQUEST)
+
+                    monto_saldo_favor_usd += detail_orig.precio_unitario * cant * factor_descuento * (Decimal('1.00') + factor_igtf)
+                    detalles_devolucion_insts.append((detail_orig.producto, cant, detail_orig.precio_unitario))
+
+                # Validar stock para nuevos productos
+                detalles_nuevos_insts = []
+                total_nuevos_usd = Decimal('0.00')
+                for item in items_nuevos_req:
+                    pid = int(item['producto_id'])
+                    cant = int(item['cantidad'])
+                    if cant <= 0:
+                        continue
+
+                    try:
+                        prod = Producto.objects.get(id=pid)
+                    except Producto.DoesNotExist:
+                        return Response({"error": f"El producto nuevo {pid} no existe."}, status=status.HTTP_404_NOT_FOUND)
+
+                    if prod.stock_actual < cant:
+                        return Response({"error": f"Stock insuficiente para {prod.nombre_completo} (disponible: {prod.stock_actual})."}, status=status.HTTP_400_BAD_REQUEST)
+
+                    total_nuevos_usd += prod.precio_venta * cant
+                    detalles_nuevos_insts.append((prod, cant, prod.precio_venta))
+
+                diferencia_usd = total_nuevos_usd - monto_saldo_favor_usd
+                metodo_diferencia = request.data.get('metodo_diferencia', None)
+
+                # Registrar Devolución/Cambio
+                devolucion = Devolucion.objects.create(
+                    venta=venta,
+                    tipo='cambio',
+                    monto_saldo_favor_usd=monto_saldo_favor_usd,
+                    monto_saldo_favor_bs=monto_saldo_favor_usd * venta.tasa_cambio,
+                    diferencia_usd=diferencia_usd,
+                    metodo_diferencia=metodo_diferencia,
+                    motivo=motivo
+                )
+
+                # Guardar detalles devueltos e incrementar stock
+                for prod, cant, precio in detalles_devolucion_insts:
+                    DetalleDevolucion.objects.create(
+                        devolucion=devolucion,
+                        producto_devuelto=prod,
+                        cantidad=cant,
+                        precio_original_usd=precio
+                    )
+                    prod.stock_actual += cant
+                    prod.save()
+
+                # Guardar detalles nuevos y restar stock
+                for prod, cant, precio in detalles_nuevos_insts:
+                    DetalleCambioNuevo.objects.create(
+                        devolucion=devolucion,
+                        producto_nuevo=prod,
+                        cantidad=cant,
+                        precio_venta_usd=precio
+                    )
+                    prod.stock_actual -= cant
+                    prod.save()
+
+                # Actualizar estado de la venta
+                total_devuelto_ya = {}
+                for d in Devolucion.objects.filter(venta=venta):
+                    for d_detail in d.detalles.all():
+                        pid = d_detail.producto_devuelto.id
+                        total_devuelto_ya[pid] = total_devuelto_ya.get(pid, 0) + d_detail.cantidad
+
+                todo_devuelto = True
+                for detail in venta.detalles.all():
+                    if total_devuelto_ya.get(detail.producto.id, 0) < detail.cantidad:
+                        todo_devuelto = False
+                        break
+
+                if todo_devuelto and not items_nuevos_req:
+                    venta.estado = 'anulada'
+                else:
+                    venta.estado = 'con_cambios'
+                venta.save()
+
+                self.actualizar_cierre_diario(devolucion)
+
+                return Response({"mensaje": "Cambio procesado exitosamente.", "devolucion_id": devolucion.id}, status=status.HTTP_201_CREATED)
+
+    def actualizar_cierre_diario(self, devolucion):
+        hoy = timezone.localtime(timezone.now()).date()
+        try:
+            cierre = CierreCaja.objects.get(fecha=hoy)
+        except CierreCaja.DoesNotExist:
+            return
+
+        total_acumulado, total_unidades, desglose_pagos = calcular_cierre_hoy_valores(hoy)
+        cierre.monto_acumulado = total_acumulado
+        cierre.productos_vendidos_count = total_unidades
+        cierre.efectivo_usd = desglose_pagos['efectivo']
+        cierre.pago_movil_usd = desglose_pagos['pago_movil']
+        cierre.punto_venta_usd = desglose_pagos['punto_venta']
+        cierre.save()
 
 
 

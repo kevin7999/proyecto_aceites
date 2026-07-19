@@ -430,6 +430,7 @@ body {
 .table-wrapper {
   flex: 1;
   overflow-y: auto;
+  overflow-x: auto;
   border: 1px solid var(--border-color);
   border-radius: 8px;
   background-color: rgba(9, 13, 22, 0.4);
@@ -1217,9 +1218,36 @@ body {
 }
 
 /* Modal de Checkout / Pago */
-.modal-content.modal-checkout {
-  width: 850px;
+.modal-content.modal-checkout,
+.modal-content.modal-devolucion {
+  width: 960px;
   max-width: 95%;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-content.modal-checkout .modal-body,
+.modal-content.modal-devolucion .modal-body {
+  overflow-y: auto;
+  flex: 1;
+  scrollbar-width: thin;
+}
+
+.modal-content.modal-checkout .modal-body::-webkit-scrollbar,
+.modal-content.modal-devolucion .modal-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.modal-content.modal-checkout .modal-body::-webkit-scrollbar-track,
+.modal-content.modal-devolucion .modal-body::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+
+.modal-content.modal-checkout .modal-body::-webkit-scrollbar-thumb,
+.modal-content.modal-devolucion .modal-body::-webkit-scrollbar-thumb {
+  background-color: var(--border-color);
+  border-radius: 4px;
 }
 
 .checkout-totals {

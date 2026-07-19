@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.db import transaction
-from .models import Producto, Venta, DetalleVenta, CierreCaja
+from .models import Producto, Venta, DetalleVenta, CierreCaja, Devolucion, DetalleDevolucion, DetalleCambioNuevo
 
 class ProductoSerializer(serializers.ModelSerializer):
     class Meta:
@@ -32,9 +32,9 @@ class VentaSerializer(serializers.ModelSerializer):
             'id', 'fecha', 'total', 'tasa_cambio', 'metodo_pago',
             'iva', 'igtf', 'monto_efectivo_usd', 'monto_electronico_bs', 'metodo_pago_restante',
             'cliente_nombre', 'cliente_cedula_rif', 'cliente_telefono', 'cliente_correo',
-            'detalles'
+            'descuento', 'estado', 'detalles'
         ]
-        read_only_fields = ['id', 'fecha', 'total', 'iva', 'igtf', 'monto_electronico_bs']
+        read_only_fields = ['id', 'fecha', 'total', 'iva', 'igtf', 'monto_electronico_bs', 'estado']
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
@@ -48,6 +48,7 @@ class VentaSerializer(serializers.ModelSerializer):
         cliente_cedula_rif = validated_data.get('cliente_cedula_rif', None)
         cliente_telefono = validated_data.get('cliente_telefono', None)
         cliente_correo = validated_data.get('cliente_correo', None)
+        descuento = validated_data.get('descuento', 0.00)
 
         if not detalles_data:
             raise serializers.ValidationError("La venta debe contener al menos un producto.")
@@ -60,7 +61,8 @@ class VentaSerializer(serializers.ModelSerializer):
                 cliente_nombre=cliente_nombre,
                 cliente_cedula_rif=cliente_cedula_rif,
                 cliente_telefono=cliente_telefono,
-                cliente_correo=cliente_correo
+                cliente_correo=cliente_correo,
+                descuento=descuento
             )
             subtotal_venta = 0
 
@@ -106,42 +108,66 @@ class VentaSerializer(serializers.ModelSerializer):
                 )
 
             # Calcular IVA (16%) y IGTF (3% sobre pago en divisa efectivo)
+            # El precio de venta registrado ya incluye el IVA, por lo que se extrae del total.
             from decimal import Decimal
-            subtotal_dec = Decimal(str(subtotal_venta))
-            iva = subtotal_dec * Decimal('0.16')
+            total_productos = Decimal(str(subtotal_venta))
+            total_productos_descontado = max(Decimal('0.00'), total_productos - Decimal(str(descuento)))
+            subtotal_dec = total_productos_descontado / Decimal('1.16')
+            iva = total_productos_descontado - subtotal_dec
 
-            if metodo_pago == 'efectivo':
-                monto_efectivo_usd = subtotal_dec + iva
-                igtf = monto_efectivo_usd * Decimal('0.03')
-                monto_electronico_bs = Decimal('0.00')
-                metodo_pago_restante = None
-            elif metodo_pago in ['pago_movil', 'punto_venta']:
-                monto_efectivo_usd = Decimal('0.00')
+            if Decimal(str(descuento)) > 0:
                 igtf = Decimal('0.00')
-                monto_electronico_bs = (subtotal_dec + iva) * Decimal(str(tasa_cambio))
-                metodo_pago_restante = None
-            elif metodo_pago == 'mixto':
-                monto_efectivo_usd = Decimal(str(monto_efectivo_usd_input))
-                igtf = monto_efectivo_usd * Decimal('0.03')
-                # El total final es subtotal + iva + igtf
-                total_final = subtotal_dec + iva + igtf
-                # El restante en Bs se calcula restando lo pagado en dólares efectivo al total en dólares
-                restante_usd = total_final - monto_efectivo_usd
-                if restante_usd < 0:
-                    raise serializers.ValidationError("El monto pagado en efectivo USD supera el total a pagar.")
-                monto_electronico_bs = restante_usd * Decimal(str(tasa_cambio))
+                if metodo_pago == 'efectivo':
+                    monto_efectivo_usd = total_productos_descontado
+                    monto_electronico_bs = Decimal('0.00')
+                    metodo_pago_restante = None
+                elif metodo_pago in ['pago_movil', 'punto_venta']:
+                    monto_efectivo_usd = Decimal('0.00')
+                    monto_electronico_bs = total_productos_descontado * Decimal(str(tasa_cambio))
+                    metodo_pago_restante = None
+                elif metodo_pago == 'mixto':
+                    monto_efectivo_usd = Decimal(str(monto_efectivo_usd_input))
+                    restante_usd = total_productos_descontado - monto_efectivo_usd
+                    if restante_usd < 0:
+                        raise serializers.ValidationError("El monto pagado en efectivo USD supera el total a pagar.")
+                    monto_electronico_bs = restante_usd * Decimal(str(tasa_cambio))
+                else:
+                    monto_efectivo_usd = Decimal('0.00')
+                    monto_electronico_bs = Decimal('0.00')
+                    metodo_pago_restante = None
             else:
-                monto_efectivo_usd = Decimal('0.00')
-                igtf = Decimal('0.00')
-                monto_electronico_bs = Decimal('0.00')
-                metodo_pago_restante = None
+                if metodo_pago == 'efectivo':
+                    monto_efectivo_usd = total_productos_descontado
+                    igtf = monto_efectivo_usd * Decimal('0.03')
+                    monto_electronico_bs = Decimal('0.00')
+                    metodo_pago_restante = None
+                elif metodo_pago in ['pago_movil', 'punto_venta']:
+                    monto_efectivo_usd = Decimal('0.00')
+                    igtf = Decimal('0.00')
+                    monto_electronico_bs = total_productos_descontado * Decimal(str(tasa_cambio))
+                    metodo_pago_restante = None
+                elif metodo_pago == 'mixto':
+                    monto_efectivo_usd = Decimal(str(monto_efectivo_usd_input))
+                    igtf = monto_efectivo_usd * Decimal('0.03')
+                    # El total final es total_productos_descontado + igtf
+                    total_final = total_productos_descontado + igtf
+                    # El restante en Bs se calcula restando lo pagado en dólares efectivo al total en dólares
+                    restante_usd = total_final - monto_efectivo_usd
+                    if restante_usd < 0:
+                        raise serializers.ValidationError("El monto pagado en efectivo USD supera el total a pagar.")
+                    monto_electronico_bs = restante_usd * Decimal(str(tasa_cambio))
+                else:
+                    monto_efectivo_usd = Decimal('0.00')
+                    igtf = Decimal('0.00')
+                    monto_electronico_bs = Decimal('0.00')
+                    metodo_pago_restante = None
 
             venta.iva = iva
             venta.igtf = igtf
             venta.monto_efectivo_usd = monto_efectivo_usd
             venta.monto_electronico_bs = monto_electronico_bs
             venta.metodo_pago_restante = metodo_pago_restante
-            venta.total = subtotal_dec + iva + igtf
+            venta.total = total_productos_descontado + igtf
             venta.save()
 
         return venta
@@ -154,4 +180,31 @@ class CierreCajaSerializer(serializers.ModelSerializer):
             'id', 'fecha', 'monto_acumulado', 'productos_vendidos_count',
             'tasa_cambio', 'efectivo_usd', 'pago_movil_usd', 'punto_venta_usd',
             'sincronizado_n8n', 'mensaje_n8n'
+        ]
+
+
+class DetalleDevolucionSerializer(serializers.ModelSerializer):
+    producto_devuelto = ProductoSerializer(read_only=True)
+    class Meta:
+        model = DetalleDevolucion
+        fields = ['id', 'producto_devuelto', 'cantidad', 'precio_original_usd']
+
+
+class DetalleCambioNuevoSerializer(serializers.ModelSerializer):
+    producto_nuevo = ProductoSerializer(read_only=True)
+    class Meta:
+        model = DetalleCambioNuevo
+        fields = ['id', 'producto_nuevo', 'cantidad', 'precio_venta_usd']
+
+
+class DevolucionSerializer(serializers.ModelSerializer):
+    detalles = DetalleDevolucionSerializer(many=True, read_only=True)
+    nuevos_items = DetalleCambioNuevoSerializer(many=True, read_only=True)
+    class Meta:
+        model = Devolucion
+        fields = [
+            'id', 'venta', 'fecha', 'tipo',
+            'monto_saldo_favor_usd', 'monto_saldo_favor_bs',
+            'diferencia_usd', 'metodo_diferencia', 'motivo',
+            'detalles', 'nuevos_items'
         ]

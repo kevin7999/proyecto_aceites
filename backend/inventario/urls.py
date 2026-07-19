@@ -4,7 +4,8 @@ from .views import (
     ProductoPorCodigoView, RegistrarVentaView, CierreDiarioView,
     ProductoViewSet, CustomObtainAuthToken, ClientesView,
     BuscarClienteView, EditarClienteView, HistorialClienteView,
-    CierreCajaListView, DownloadBackupView, ImportarProductosView
+    CierreCajaListView, DownloadBackupView, ImportarProductosView,
+    DevolucionView
 )
 
 router = DefaultRouter()
@@ -23,6 +24,7 @@ urlpatterns = [
     path('clientes/editar/', EditarClienteView.as_view(), name='cliente-editar'),
     path('clientes/historial/', HistorialClienteView.as_view(), name='cliente-historial'),
     path('backup/', DownloadBackupView.as_view(), name='download-backup'),
+    path('devoluciones/', DevolucionView.as_view(), name='devoluciones'),
 ]
 
 
